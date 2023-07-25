@@ -6,7 +6,7 @@ setup(
     name="gwenlake",
     version='0.1.0',
     url="https://github.com/gwenlake/gwenlake-python",
-    author="Gwenlake",
+    author="The Gwenlake Team",
     author_email="info@gwenlake.com",
     install_requires=["requests", "pandas"],
     packages=find_packages(exclude=('tests', 'docs'))
