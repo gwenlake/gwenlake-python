@@ -12,14 +12,9 @@ class Client:
         self.endpoint = endpoint or ENDPOINT
         self.headers = { "Authorization": f"Bearer {self.token}"}
         self.session = requests.Session()
-
-
-    def _build_api_url(self, query):
-        return f"{self.endpoint}/{query}"
     
-
     def _call(self, query, payload: Optional[str] = None, method: Optional[str] = "get"):
-        url = self._build_api_url(query)
+        url = f"{self.endpoint}/{query}"
         if method == "post":
             resp = self.session.post(url, headers=self.headers, json=payload)
         else:
