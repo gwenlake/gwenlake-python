@@ -18,24 +18,18 @@ class Client:
         return f"{self.endpoint}/{query}"
     
 
-    def _post(self, query, payload: Optional[str] = None):
-        resp = self.session.post(
-            self._build_api_url(query),
-            headers=self.headers,
-            json=payload,
-        )
-        return resp
-
-    def _get(self, query, payload: Optional[str] = None):
-        resp = self.session.get(
-            self._build_api_url(query),
-            headers=self.headers,
-            json=payload,
-        )
-        return resp
+    def _call(self, query, payload: Optional[str] = None, method: Optional[str] = "get"):
+        url = self._build_api_url(query)
+        if method == "post":
+            resp = self.session.post(url, headers=self.headers, json=payload)
+        else:
+            resp = self.session.get(url, headers=self.headers, json=payload)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
 
     def list_models(self):
-        resp = self._get("models")
-        if resp.status_code == 200:
-            return resp.json()["data"]
+        resp = self._call("models")
+        if resp:
+            return resp["data"]
         return None
