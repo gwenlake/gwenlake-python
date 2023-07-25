@@ -1,8 +1,7 @@
 import context
+import pandas as pd
 import gwenlake
 
-gwenlake.api_key = "test"
-
 client = gwenlake.api.Client()
-resp = client._post("test", {"text": "test de texte"})
-print(resp)
+resp = client.list_models()
+print(pd.DataFrame(resp))

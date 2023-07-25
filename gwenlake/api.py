@@ -6,12 +6,12 @@ import gwenlake
 
 class Client:
 
-    def __init__(self, api_key: Optional[str] = None, organization: Optional[str] = None):
-        self.api_key = api_key or gwenlake.api_key
+    def __init__(self, token: Optional[str] = None, organization: Optional[str] = None):
+        self.token = token or gwenlake.api_key
         self.organization = organization or gwenlake.organization
         self.api_base = gwenlake.api_base
-        self.timeout = gwenlake.TIMEOUT
-        self.headers = { "Authorization": f"Bearer {self.api_key}"}
+        self.timeout = gwenlake.timeout
+        self.headers = { "Authorization": f"Bearer {self.token}"}
         self.session = requests.Session()
 
 
@@ -19,7 +19,7 @@ class Client:
         return f"{self.api_base}/{query}"
     
 
-    def _post(self, query, payload):
+    def _post(self, query, payload: Optional[str] = None):
         resp = self.session.post(
             self._build_api_url(query),
             headers=self.headers,
@@ -27,3 +27,18 @@ class Client:
             json=payload,
         )
         return resp
+
+    def _get(self, query, payload: Optional[str] = None):
+        resp = self.session.get(
+            self._build_api_url(query),
+            headers=self.headers,
+            timeout=self.timeout,
+            json=payload,
+        )
+        return resp
+
+    def list_models(self):
+        resp = self._get("models")
+        if resp.status_code == 200:
+            return resp.json()["data"]
+        return None
