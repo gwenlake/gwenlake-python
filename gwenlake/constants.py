@@ -1,1 +1,1 @@
-ENDPOINT = "https://api.gwenlake.com"
+ENDPOINT = "https://api.gwenlake.com/v1"
