@@ -1,7 +1,5 @@
-import os
+__version__ = "0.1.0"
 
 from gwenlake.api import (
-    Client,
+    APIClient,
 )
-
-from gwenlake.version import VERSION
