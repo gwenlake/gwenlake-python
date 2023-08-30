@@ -36,7 +36,6 @@ class APIClient:
         return None
     
     def embed_documents(self, documents, model_id="e5-base-v2"):
-        print(model_id)
         payload = [ { "input": text } for text in documents ]
         resp = self.fetch(f"/models/{model_id}", payload=payload, method="post")
         if resp:
