@@ -35,7 +35,7 @@ class APIClient:
             return resp["data"]
         return None
     
-    def embed_documents(self, documents, model_id="all-mpnet-base-v2"):
+    def embed_documents(self, documents, model_id="e5-base-v2"):
         payload = [ { "input": text } for text in documents ]
         resp = self.fetch(f"/models/{model_id}", payload=payload, method="post")
         if resp:
