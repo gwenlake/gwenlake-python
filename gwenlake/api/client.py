@@ -39,7 +39,6 @@ class APIClient:
         payload = [ { "input": text } for text in documents ]
         resp = self.fetch(f"/models/{model_id}", payload=payload, method="post")
         if resp:
-            print(resp)
             if "data" in resp:
                 return [x["embedding"] for x in resp["data"]]
         return None
