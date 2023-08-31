@@ -7,10 +7,10 @@ import openai
 
 class ChatOpenAI():
  
-    def __init__(self, api_base: Optional[str] = None, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo-16k", stream: bool = False):
+    def __init__(self, api_base: Optional[str] = None, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo-16k", stream: bool = False, system: str = ""ou are a large language model designed to support user in their work.):
         self.model = model
         self.stream = stream
-        self.system = "You are a large language model designed to support user in their work."
+        self.system = system
         if os.environ.get("OPENAI_API_TYPE") == "azure":
             print("OpenAI Azure mode.")
             openai.api_key     = api_key or os.environ.get("OPENAI_API_KEY")
