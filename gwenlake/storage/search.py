@@ -15,12 +15,12 @@ class OpenSearchDocumentStore:
         self.index_name = index
         self.timeout = timeout
 
-    def get_document_count(self, query):
+    def count(self, query: str):
         q = { "query": query, "track_total_hits": True, "size": 1 }
         resp = self.client.search(body=q, index=self.index_name, request_timeout=self.timeout)
         return resp['hits']['total']['value']
 
-    def get_document_by_id(self, id):
+    def get_by_id(self, id: str):
         try:
             data = self.client.get(id=id, index=self.index_name)
             if "_source" in data:
@@ -29,7 +29,7 @@ class OpenSearchDocumentStore:
             pass
         return None
 
-    def delete_documents(self, ids):
+    def delete(self, ids):
         if not isinstance(ids, list):
             ids = [ids]
         if len(ids)==0:
@@ -39,7 +39,7 @@ class OpenSearchDocumentStore:
             self.client.delete(index=self.index_name, id=id)
         return True
 
-    def add_documents(self, documents, column_id="id"):
+    def add(self, documents, column_id="id"):
         if not isinstance(documents, list):
             documents = [documents]
         if len(documents)==0:
@@ -54,7 +54,7 @@ class OpenSearchDocumentStore:
         logger.info(f"Indexed {success} documents")
         return True
 
-    def query(self, q, sort=None, page=1, per_page=5000, fields=None, all=False, track_total_hits=True):
+    def query(self, q, aggs=None, sort=None, page=1, per_page=5000, fields=None, all=False, track_total_hits=True):
 
         # if all==True:
         #     per_page = 10000
@@ -70,6 +70,9 @@ class OpenSearchDocumentStore:
         if fields:
             q["fields"] = fields
 
+        if aggs:
+            q["aggs"]=aggs
+
         if sort:
             q["sort"] = sort
 
@@ -81,23 +84,26 @@ class OpenSearchDocumentStore:
 
         if not all:
             resp = self.client.search(body=q, index=self.index_name, request_timeout=self.timeout)
-            total = resp['hits']['total']['value']
+            # total = resp['hits']['total']['value']
             documents = [hit["_source"] for hit in resp['hits']['hits']]
+            if aggs:
+                return documents, resp["aggregations"]
+            return documents
 
-        else:
-            resp = self.client.search(body=q, index=self.index_name, request_timeout=self.timeout, scroll='1m')
+        resp = self.client.search(body=q, index=self.index_name, request_timeout=self.timeout, scroll='1m')
+        for doc in resp['hits']['hits']:
+            documents.append(doc["_source"])
+        scroll_id = resp['_scroll_id']
+        while len(resp['hits']['hits']):
+            resp = self.client.scroll(scroll_id=scroll_id, scroll='1m')
             for doc in resp['hits']['hits']:
                 documents.append(doc["_source"])
-            scroll_id = resp['_scroll_id']
-            while len(resp['hits']['hits']):
-                resp = self.client.scroll(scroll_id=scroll_id, scroll='1m')
-                for doc in resp['hits']['hits']:
-                    documents.append(doc["_source"])
-                if scroll_id != resp["_scroll_id"]:
-                    self.client.clear_scroll(scroll_id=scroll_id)
-                    scroll_id = resp['_scroll_id']
-            self.client.clear_scroll(scroll_id=scroll_id)
-            total = len(documents)
-            per_page = len(documents)
-
-        return {"object": "list", "total": total, "page": page, "per_page": per_page, "data": documents}
+            if scroll_id != resp["_scroll_id"]:
+                self.client.clear_scroll(scroll_id=scroll_id)
+                scroll_id = resp['_scroll_id']
+        self.client.clear_scroll(scroll_id=scroll_id)
+        # total = len(documents)
+        # per_page = len(documents)
+        # return {"object": "list", "total": total, "page": page, "per_page": per_page, "data": documents}
+        return documents
+    
