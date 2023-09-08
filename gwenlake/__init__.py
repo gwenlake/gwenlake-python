@@ -7,3 +7,7 @@ from gwenlake.api import (
 from gwenlake.chat import (
     ChatOpenAI,
 )
+
+from gwenlake.storage import (
+    OpenSearchDocumentStore,
+)
