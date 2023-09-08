@@ -13,10 +13,13 @@ class APIClient:
         self.headers = { "Authorization": f"Bearer {self.token}"}
         self.session = requests.Session()
     
-    def fetch(self, query, payload: Optional[str] = None, method: Optional[str] = "get"):
+    def fetch(self, query, payload: Optional[str] = None, files: Optional[dict] = None, method: Optional[str] = "get"):
         url = f"{self.endpoint}{query}"
         if method == "post":
-            resp = self.session.post(url, headers=self.headers, json=payload)
+            if files:
+                resp = self.session.post(url, headers=self.headers, json=payload, files=files)
+            else:
+                resp = self.session.post(url, headers=self.headers, json=payload)
         else:
             resp = self.session.get(url, headers=self.headers, json=payload)
         if resp.status_code == 200:

@@ -11,3 +11,7 @@ from gwenlake.chat import (
 from gwenlake.storage import (
     OpenSearchDocumentStore,
 )
+
+from gwenlake.documents import (
+    DocumentTextReader,
+)
