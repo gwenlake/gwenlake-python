@@ -1,3 +1,3 @@
 from .client import (
-    APIClient,
+    Client,
 )

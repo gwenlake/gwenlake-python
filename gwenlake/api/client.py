@@ -5,7 +5,7 @@ from typing import Optional
 from ..constants import ENDPOINT
 
 
-class APIClient:
+class Client:
 
     def __init__(self, token: Optional[str] = None, endpoint: Optional[str] = None):
         self.token = token or os.environ.get("GWENLAKE_API_KEY")
