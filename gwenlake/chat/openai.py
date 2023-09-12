@@ -7,7 +7,7 @@ import openai
 
 class ChatOpenAI():
  
-    def __init__(self, api_base: Optional[str] = None, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo-16k", stream: bool = False, system: str = "You are a large language model designed to support user in their work."):
+    def __init__(self, api_base: Optional[str] = None, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo-16k", stream: bool = False, system: str = "You are a large language model designed to support users in their work."):
         self.model = model
         self.stream = stream
         self.system = system
