@@ -81,13 +81,14 @@ class OpenSearchDocumentStore():
         #     q["search_after"] = search_after
         
         documents = []
+        aggregations = []
         if not all:
             resp = self.client.search(body=body, index=self.index_name, request_timeout=self.timeout)
-            # total = resp['hits']['total']['value']
+            total = resp['hits']['total']['value']
             documents = [hit["_source"] for hit in resp['hits']['hits']]
             if aggs:
-                return documents, resp["aggregations"]
-            return documents
+                aggregations = resp['aggregations']
+            return {"object": "list", "total": total, "page": page, "per_page": per_page, "data": documents, "aggs":aggregations}
 
         resp = self.client.search(body=body, index=self.index_name, request_timeout=self.timeout, scroll='1m')
         for doc in resp['hits']['hits']:
@@ -101,8 +102,8 @@ class OpenSearchDocumentStore():
                 self.client.clear_scroll(scroll_id=scroll_id)
                 scroll_id = resp['_scroll_id']
         self.client.clear_scroll(scroll_id=scroll_id)
-        # total = len(documents)
-        # per_page = len(documents)
-        # return {"object": "list", "total": total, "page": page, "per_page": per_page, "data": documents}
-        return documents
+        total = len(documents)
+        per_page = len(documents)
+        return {"object": "list", "total": total, "page": page, "per_page": per_page, "data": documents, "aggs":aggregations}
+        # return documents
     
