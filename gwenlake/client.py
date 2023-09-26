@@ -18,14 +18,14 @@ class Client:
 
     def __init__(self, token: Optional[str] = None, endpoint: Optional[str] = None, timeout_ms: Optional[int] = None,):
         self.token = token or os.environ.get("GWENLAKE_API_KEY")
-        self.host_url = endpoint or ENDPOINT
+        self.api_url = endpoint or ENDPOINT
         self.headers = { "Authorization": f"Bearer {self.token}"}
         self.session = requests.Session()
         self.timeout_ms = timeout_ms or 7000
     
     
     def fetch(self, query, payload: Optional[str] = None, files: Optional[dict] = None, method: Optional[str] = "get"):
-        url = f"{self.endpoint}{query}"
+        url = f"{self.api_url}{query}"
         if method == "post":
             if files:
                 resp = self.session.post(url, headers=self.headers, json=payload, files=files)
@@ -49,10 +49,11 @@ class Client:
                     files=file_,
                 )
         elif isinstance(file, tuple):
+            file_ = {"file": file}
             response = self.session.post(
                 self.api_url + "/data/upload",
                 headers=self.headers,
-                files={"file": file},
+                files=file_,
             )
         else:
             raise ValueError("file must be a string or tuple")
