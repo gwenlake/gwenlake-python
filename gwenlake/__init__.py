@@ -1,17 +1,15 @@
-__version__ = "0.1.0"
+"""Gwenlake API Client."""
+from importlib import metadata
 
-from gwenlake.api import (
-    Client,
-)
+try:
+    __version__ = metadata.version(__package__)
+except metadata.PackageNotFoundError:
+    # Case where package metadata is not available.
+    __version__ = ""
 
-from gwenlake.chat import (
-    ChatOpenAI,
-)
+from gwenlake.client import Client
 
-from gwenlake.storage import (
-    OpenSearchDocumentStore,
-)
-
-from gwenlake.documents import (
-    DocumentTextReader,
-)
+__all__ = [
+    "Client",
+    "__version__",
+]
