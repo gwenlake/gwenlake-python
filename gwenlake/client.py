@@ -4,9 +4,6 @@ import logging
 import requests
 from typing import Optional, Union, Sequence, Tuple
 
-from gwenlake import schemas as glk_schemas
-from gwenlake import utils as glk_utils
-
 
 ENDPOINT = "https://api.gwenlake.com/v1"
 

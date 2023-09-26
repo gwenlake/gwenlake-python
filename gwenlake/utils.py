@@ -1,4 +1,3 @@
-"""Generic utility functions."""
 import enum
 import functools
 import logging
@@ -30,7 +29,7 @@ class GwenlakeConnectionError(Exception):
     """Couldn't connect to the Gwenlake API."""
 
 
-def tracing_is_enabled() -> bool:
+def langchain_tracing_is_enabled() -> bool:
     """Return True if tracing is enabled."""
     return (
         os.environ.get(
@@ -38,15 +37,6 @@ def tracing_is_enabled() -> bool:
         ).lower()
         == "true"
     )
-
-
-def raise_for_status_with_text(response: requests.Response) -> None:
-    """Raise an error with the response text."""
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as e:
-        raise ValueError(str(e), response.text) from e
-
 
 def get_enum_value(enu: Union[enum.Enum, str]) -> str:
     """Get the value of a string enum."""
