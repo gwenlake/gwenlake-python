@@ -23,6 +23,7 @@ class Client:
         self.session = requests.Session()
         self.timeout_ms = timeout_ms or 7000
     
+    
     def fetch(self, query, payload: Optional[str] = None, files: Optional[dict] = None, method: Optional[str] = "get"):
         url = f"{self.endpoint}{query}"
         if method == "post":
@@ -36,55 +37,35 @@ class Client:
             return resp.json()
         return None
 
-    def upload_file(
-        self,
-        file: Union[str, Tuple[str, io.BytesIO]],
-        input_keys: Sequence[str],
-        output_keys: Sequence[str],
-        *,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        data_type: Optional[glk_schemas.DataType] = glk_schemas.DataType.kv,
-    ) -> glk_schemas.Dataset:
-        
-        data = {
-            "input_keys": input_keys,
-            "output_keys": output_keys,
-        }
-        if name:
-            data["name"] = name
-        if description:
-            data["description"] = description
-        if data_type:
-            data["data_type"] = glk_utils.get_enum_value(data_type)
+
+    def upload_file(self, file: Union[str, Tuple[str, io.BytesIO]]):
 
         if isinstance(file, str):
             with open(file, "rb") as f:
                 file_ = {"file": f}
                 response = self.session.post(
                     self.api_url + "/data/upload",
-                    headers=self._headers,
-                    data=data,
+                    headers=self.headers,
                     files=file_,
                 )
         elif isinstance(file, tuple):
             response = self.session.post(
                 self.api_url + "/data/upload",
-                headers=self._headers,
-                data=data,
+                headers=self.headers,
                 files={"file": file},
             )
         else:
             raise ValueError("file must be a string or tuple")
-        
-        glk_utils.raise_for_status_with_text(response)
-        result = response.json()
-        if "detail" in result and "already exists" in result["detail"]:
-            file_name = file if isinstance(file, str) else file[0]
-            file_name = file_name.split("/")[-1]
-            raise ValueError(f"Dataset {file_name} already exists")
+    
+        if response.status_code == 200:
+            result = response.json()
+            if "detail" in result and "already exists" in result["detail"]:
+                file_name = file if isinstance(file, str) else file[0]
+                file_name = file_name.split("/")[-1]
+                raise ValueError(f"Dataset {file_name} already exists")
+            return result
 
-        return glk_schemas.Dataset(**result, _host_url=self.host_url)
+        return None
 
 
     def list_models(self):
