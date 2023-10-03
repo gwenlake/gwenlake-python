@@ -18,7 +18,7 @@ class Client:
         self.api_url = endpoint or ENDPOINT
         self.headers = { "Authorization": f"Bearer {self.token}"}
         self.session = requests.Session()
-        self.timeout = timeout or 15
+        self.timeout = timeout or 30
     
     
     def fetch(self, query, payload: Optional[str] = None, files: Optional[dict] = None, method: Optional[str] = "get"):
