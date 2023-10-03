@@ -16,8 +16,8 @@ def list_models():
 
 @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
 def run_model(model_id, inputs):
-    resp = Client().fetch(f"/models/{model_id}", payload=inputs, method="post")
-    if resp:
-        return resp["data"]
+    response = Client().fetch(f"/models/{model_id}", payload=inputs, method="post")
+    if response:
+        return response["data"]
     return None
 
