@@ -13,23 +13,23 @@ logger = logging.getLogger(__name__)
 
 class Client:
 
-    def __init__(self, token: Optional[str] = None, endpoint: Optional[str] = None, timeout_ms: Optional[int] = None,):
+    def __init__(self, token: Optional[str] = None, endpoint: Optional[str] = None, timeout: Optional[int] = None,):
         self.token = token or os.environ.get("GWENLAKE_API_KEY")
         self.api_url = endpoint or ENDPOINT
         self.headers = { "Authorization": f"Bearer {self.token}"}
         self.session = requests.Session()
-        self.timeout_ms = timeout_ms or 7000
+        self.timeout = timeout or 15
     
     
     def fetch(self, query, payload: Optional[str] = None, files: Optional[dict] = None, method: Optional[str] = "get"):
         url = f"{self.api_url}{query}"
         if method == "post":
             if files:
-                resp = self.session.post(url, headers=self.headers, json=payload, files=files)
+                resp = self.session.post(url, headers=self.headers, json=payload, files=files, timeout= self.timeout)
             else:
-                resp = self.session.post(url, headers=self.headers, json=payload)
+                resp = self.session.post(url, headers=self.headers, json=payload, timeout= self.timeout)
         else:
-            resp = self.session.get(url, headers=self.headers, json=payload)
+            resp = self.session.get(url, headers=self.headers, json=payload, timeout= self.timeout)
         if resp.status_code == 200:
             return resp.json()
         return None
