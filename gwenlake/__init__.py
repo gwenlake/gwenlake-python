@@ -1,4 +1,9 @@
 """Gwenlake API Client."""
+import os
+import sys
+from typing import TYPE_CHECKING, Optional, Union, Callable
+import requests
+
 from importlib import metadata
 
 try:
@@ -20,3 +25,7 @@ __all__ = [
     "get_embeddings",
     "upload_file",
 ]
+
+api_key  = os.environ.get("GWENLAKE_API_KEY")
+api_base = os.environ.get("GWENLAKE_API_BASE") or "https://api.gwenlake.com/v1"
+
