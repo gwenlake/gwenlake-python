@@ -27,5 +27,6 @@ class Client:
         else:
             resp = self.session.get(url, headers=headers, json=payload, timeout=self.timeout)
         if resp.status_code != 200:
+            logger.warning("Error", resp.status_code)
             raise Exception
         return resp.json()
