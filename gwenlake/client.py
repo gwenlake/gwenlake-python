@@ -21,7 +21,7 @@ class Client:
     
     def fetch(self, query, payload: Optional[str] = None, files: Optional[dict] = None, method: Optional[str] = "get"):
         url = f"{self.api_base}{query}"
-        headers = { "Authorization": f"Bearer {self.api_key}" }
+        headers = { "Authorization": f"Bearer {self.api_key}", "Accept": "application/json" }
         if method == "post":
             resp = self.session.post(url, headers=headers, json=payload, timeout=self.timeout, files=files)
         else:

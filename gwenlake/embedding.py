@@ -1,4 +1,6 @@
 import logging
+import numpy as np
+import base64
 from typing import List
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
@@ -13,5 +15,10 @@ def get_embeddings(inputs: List[str], model_id="e5-base-v2") -> List[List[float]
     response = Client().fetch(f"/models/{model_id}", payload=payload, method="post")
     if response:
         if "data" in response:
+            # for data in response.data:
+            #     if type(data["embedding"]) == str:
+            #         data["embedding"] = np.frombuffer(
+            #             base64.b64decode(data["embedding"]), dtype="float32"
+            #         ).tolist()
             return [d["embedding"] for d in response["data"]]
     return None
