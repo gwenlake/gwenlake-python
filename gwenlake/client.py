@@ -24,12 +24,12 @@ class Client:
         url = f"{self.api_base}{query}"
         headers = { "Authorization": f"Bearer {self.api_key}", "Accept": "application/json" }
         if method == "post":
-            data_to_send = json.dumps(payload).encode("utf-8")
-            r = self.session.post(url, headers=headers, data=data_to_send, timeout=self.timeout, files=files)
-            # r = self.session.post(url, headers=headers, json=payload, timeout=self.timeout, files=files)
+            # data_to_send = json.dumps(payload).encode("utf-8")
+            # r = self.session.post(url, headers=headers, data=data_to_send, timeout=self.timeout, files=files)
+            r = self.session.post(url, headers=headers, json=payload, timeout=self.timeout, files=files)
         else:
             r = self.session.get(url, headers=headers, json=payload, timeout=self.timeout)
         if r.status_code != 200:
-            logger.exception("An error occurred while embedding.")
+            # logger.exception("An error occurred while embedding.")
             raise Exception
         return r.json()
