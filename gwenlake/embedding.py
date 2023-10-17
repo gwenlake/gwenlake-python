@@ -10,9 +10,9 @@ logger = logging.getLogger(__name__)
 
 
 @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
-def get_embeddings(inputs: List[str], model_id="e5-base-v2") -> List[List[float]]:
-    payload = [ { "input": text.replace("\n", " ") } for text in inputs ]
-    response = Client().fetch(f"/models/{model_id}", payload=payload, method="post")
+def get_embeddings(inputs: List[str], model_id="intfloat/e5-base-v2") -> List[List[float]]:
+    payload = { "input": [ text.replace("\n", " ") for text in inputs ], "model": model_id }
+    response = Client().fetch(f"/embeddings", payload=payload, method="post")
     if response:
         if "data" in response:
             # for data in response.data:
