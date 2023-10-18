@@ -1,9 +1,5 @@
 """Gwenlake API Client."""
 import os
-import sys
-from typing import TYPE_CHECKING, Optional, Union, Callable
-import requests
-
 from importlib import metadata
 
 try:
@@ -15,7 +11,7 @@ except metadata.PackageNotFoundError:
 from gwenlake.client import Client
 from gwenlake.data import upload_file
 from gwenlake.models import list_models, run_model
-from gwenlake.embedding import get_embeddings
+from gwenlake.embeddings import get_embeddings
 
 __all__ = [
     "Client",
