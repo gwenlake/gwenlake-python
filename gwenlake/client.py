@@ -22,13 +22,11 @@ class Client:
     
     def fetch(self, query, payload: Optional[str] = None, files: Optional[dict] = None, method: Optional[str] = "get"):
         url = f"{self.api_base}{query}"
-        print(self.api_key)
         headers = { "Authorization": f"Bearer {self.api_key}", "Accept": "application/json" }
         if method == "post":
             # data_to_send = json.dumps(payload).encode("utf-8")
             # r = self.session.post(url, headers=headers, data=data_to_send, timeout=self.timeout, files=files)
             r = self.session.post(url, headers=headers, json=payload, timeout=self.timeout, files=files)
-            print(r)
         else:
             r = self.session.get(url, headers=headers, json=payload, timeout=self.timeout)
         if r.status_code != 200:
