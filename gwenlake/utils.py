@@ -1,13 +1,11 @@
 import enum
-import functools
 import logging
 import os
-import subprocess
 from typing import Any, Callable, Dict, List, Mapping, Tuple, Union
+import tiktoken
 
-import requests
-
-from gwenlake import schemas as glk_schemas
+# import requests
+# from gwenlake import schemas as glk_schemas
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,3 +42,8 @@ def get_enum_value(enu: Union[enum.Enum, str]) -> str:
         return enu.value
     return enu
 
+def num_tokens_from_string(string: str, encoding_name: str = "cl100k_base") -> int:
+    """Returns the number of tokens in a text string."""
+    encoding = tiktoken.get_encoding(encoding_name)
+    num_tokens = len(encoding.encode(string))
+    return num_tokens
