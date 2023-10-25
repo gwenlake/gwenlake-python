@@ -17,16 +17,16 @@ def upload_file(file: Union[str, Tuple[str, io.BytesIO]]):
 
     if isinstance(file, str):
         with open(file, "rb") as f:
-            file_ = {"file": f}
+            files = {"file": f}
             response = client.session.post(
-                client.api_url + "/data/upload",
+                client.api_url + "/data/uploadfiles",
                 headers=client.headers,
-                files=file_,
+                files=files,
             )
     elif isinstance(file, tuple):
         file_ = {"file": file}
         response = client.session.post(
-            client.api_url + "/data/upload",
+            client.api_url + "/data/uploadfiles",
             headers=client.headers,
             files=file_,
         )
