@@ -9,7 +9,7 @@ except metadata.PackageNotFoundError:
     __version__ = ""
 
 from gwenlake.client import Client
-from gwenlake.data import upload_file
+from gwenlake.data import upload
 from gwenlake.models import list_models, run_model
 from gwenlake.embeddings import get_embeddings
 
@@ -19,7 +19,7 @@ __all__ = [
     "list_models",
     "run_model",
     "get_embeddings",
-    "upload_file",
+    "upload",
 ]
 
 api_key  = os.environ.get("GWENLAKE_API_KEY")
