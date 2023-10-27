@@ -14,7 +14,7 @@ list_of_texts = [
 ]
 
 gwenlake.api_key = os.getenv("GWENLAKE_API_KEY")
-embeddings = gwenlake.get_embeddings(list_of_texts)
+embeddings = gwenlake.Client().get_embeddings(list_of_texts)
 print(pd.DataFrame(embeddings))
 
 

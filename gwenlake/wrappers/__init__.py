@@ -13,8 +13,8 @@ from gwenlake.embeddings import get_embeddings
 
 
 __all__ = [
-    "__version__",
     "Client",
+    "__version__",
     "get_embeddings",
 ]
 
