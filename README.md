@@ -13,7 +13,7 @@ You don't need this source code unless you want to modify the package. If you ju
 want to use the package, just run:
 
 ```sh
-git+https://github.com/gwenlake/gwenlake-python
+pip install -U git+https://github.com/gwenlake/gwenlake-python
 ```
 
 ## Usage
