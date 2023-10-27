@@ -13,13 +13,7 @@ You don't need this source code unless you want to modify the package. If you ju
 want to use the package, just run:
 
 ```sh
-pip install --upgrade gwenlake
-```
-
-Install from source with:
-
-```sh
-python setup.py install
+git+https://github.com/gwenlake/gwenlake-python
 ```
 
 ## Usage
