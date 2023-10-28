@@ -24,6 +24,7 @@ list_of_docs = [
 ]
 
 response = gwenlake.Client().upload_data(data_id=data_id, data=list_of_docs)
-print(response)
+if response:
+    print(response)
 
 

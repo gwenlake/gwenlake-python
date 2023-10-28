@@ -21,7 +21,7 @@ class Client:
         self.session  = requests.Session()
     
     
-    # @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
+    @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
     def fetch(self, query, payload: Optional[str] = None, files: Optional[list] = None, method: Optional[str] = "get"):
         url = f"{self.api_base}{query}"
         headers = { "Authorization": f"Bearer {self.api_key}" }
@@ -34,7 +34,6 @@ class Client:
             r = self.session.get(url, headers=headers, json=payload, timeout=self.timeout)
         if r.status_code != 200:
             logger.exception("An error occurred while calling API.")
-            # logger.warning(r.json())
             raise Exception
         return r.json()
 
