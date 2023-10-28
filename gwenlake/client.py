@@ -34,7 +34,7 @@ class Client:
             r = self.session.get(url, headers=headers, json=payload, timeout=self.timeout)
         if r.status_code != 200:
             logger.exception("An error occurred while calling API.")
-            logger.warning(r.json())
+            # logger.warning(r.json())
             raise Exception
         return r.json()
 
