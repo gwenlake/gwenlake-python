@@ -43,13 +43,13 @@ class Client:
         if not isinstance(file, str):
             raise ValueError("file must be a string")
         path = os.path.dirname(file).strip(".").strip("/")
-        url = f"/data/{ data_id }/upload?path={path}"
+        url = f"/data/{ data_id }/uploadfile?path={path}"
         file_ = {"file": open(file, "rb")}
         return self.fetch(url, files=file_, method="post")
 
-    def upload_json(self, data_id: str, data: []):
-        url = f"/data/{ data_id }/uploadjson"
-        payload = { "input": data }
+    def upload_data(self, data_id: str, data: []):
+        url = f"/data/{ data_id }/uploaddata"
+        payload = { "data": data }
         return self.fetch(url, payload=payload, method="post")
             
     def list_models(self):
