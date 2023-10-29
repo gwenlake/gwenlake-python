@@ -87,5 +87,7 @@ class Client:
         response = self.fetch(url, files=file_, method="post")
         if embeddings and "data" in response:
             chunks = [d["chunk"] for d in response["data"]]
-            response["embeddings"] = self.embed(chunks)
+            e = self.embed(chunks)
+            for i, _ in enumerate(e):
+                response["data"][i]["embedding"] = e[i]
         return response
