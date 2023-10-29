@@ -70,3 +70,10 @@ class Client:
             if "data" in response:
                 return [d["embedding"] for d in response["data"]]
         return None
+
+    def vectorizer(self, file: str):
+        if not isinstance(file, str):
+            raise ValueError("file must be a string")
+        url = f"/textprocessing/vectorizer"
+        file_ = {"file": open(file, "rb")}
+        return self.fetch(url, files=file_, method="post")
