@@ -79,9 +79,9 @@ class Client:
         file_ = {"file": open(file, "rb")}
         return self.fetch(url, files=file_, method="post")
     
-    def vectorizer(self, file: str):
+    def vectorizer(self, file: str, chunk_size: int = 256, chunk_overlap: int = 50):
         if not isinstance(file, str):
             raise ValueError("file must be a string")
-        url = f"/textprocessing/vectorizer"
+        url = f"/textprocessing/vectorizer?chunk_size={chunk_size}&chunk_overlap={chunk_overlap}"
         file_ = {"file": open(file, "rb")}
         return self.fetch(url, files=file_, method="post")
