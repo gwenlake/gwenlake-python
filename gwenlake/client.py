@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+import pandas as pd
 from typing import Optional, List
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
@@ -63,14 +64,13 @@ class Client:
             return response["data"]
         return None
 
-    def get_embeddings(self, inputs: List[str], model_id="intfloat/e5-base-v2") -> List[List[float]]:
+    def embed(self, inputs: List[str], model_id="intfloat/e5-base-v2") -> List[List[float]]:
         payload = { "input": [ text.replace("\n", " ") for text in inputs ], "model": model_id }
         response = self.fetch(f"/embeddings", payload=payload, method="post")
         if response:
             if "data" in response:
                 return [d["embedding"] for d in response["data"]]
         return None
-
 
     def textreader(self, file: str):
         if not isinstance(file, str):
@@ -79,9 +79,13 @@ class Client:
         file_ = {"file": open(file, "rb")}
         return self.fetch(url, files=file_, method="post")
     
-    def vectorizer(self, file: str, chunk_size: int = 256, chunk_overlap: int = 50):
+    def vectorizer(self, file: str, chunk_size: int = 256, chunk_overlap: int = 50, embeddings=True):
         if not isinstance(file, str):
             raise ValueError("file must be a string")
         url = f"/textprocessing/vectorizer?chunk_size={chunk_size}&chunk_overlap={chunk_overlap}"
         file_ = {"file": open(file, "rb")}
-        return self.fetch(url, files=file_, method="post")
+        response = self.fetch(url, files=file_, method="post")
+        if embeddings and "data" in response:
+            chunks = [d["chunk"] for d in response["data"]]
+            response["embeddings"] = self.embed(chunks)
+        return response
