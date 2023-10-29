@@ -65,12 +65,18 @@ class Client:
         return None
 
     def embed(self, inputs: List[str], model_id="intfloat/e5-base-v2") -> List[List[float]]:
-        payload = { "input": [ text.replace("\n", " ") for text in inputs ], "model": model_id }
-        response = self.fetch(f"/embeddings", payload=payload, method="post")
-        if response:
-            if "data" in response:
-                return [d["embedding"] for d in response["data"]]
-        return None
+        batch_size = 100
+        embeddings = []
+        try:
+            for i in range(0, len(inputs), batch_size):
+                i_end = min(len(inputs), i+batch_size)
+                batch = inputs[i:i_end]
+                payload = { "input": [ text.replace("\n", " ") for text in batch ], "model": model_id }
+                response = self.fetch(f"/embeddings", payload=payload, method="post")
+                embeddings += [d["embedding"] for d in response["data"]]
+        except:
+            return None
+        return embeddings
 
     def textreader(self, file: str):
         if not isinstance(file, str):
