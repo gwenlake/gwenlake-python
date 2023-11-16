@@ -10,12 +10,14 @@ except metadata.PackageNotFoundError:
 
 from gwenlake.client import Client
 from gwenlake.embeddings import get_embeddings
-
+from gwenlake.wrappers import langchain
 
 __all__ = [
     "__version__",
     "Client",
     "get_embeddings",
+    "langchain"
+    
 ]
 
 api_key  = os.environ.get("GWENLAKE_API_KEY")
