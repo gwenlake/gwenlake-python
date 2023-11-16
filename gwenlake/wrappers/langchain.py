@@ -41,9 +41,14 @@ class SelfQueryRetrieverWithScores(SelfQueryRetriever):
         if self.verbose:
             print(f"Generated Query: {structured_query}")
             logger.info(f"Generated Query: {structured_query}")
+        
         new_query, search_kwargs = self._prepare_query(query, structured_query)
+        new_query = new_query.strip()
+        if not new_query and not structured_query.filter:
+            return []
+
         docs_and_scores = self._get_docs_with_query(new_query, search_kwargs)
-        print(docs_and_scores)
+        # print(docs_and_scores)
         for doc, score in docs_and_scores:
             doc.metadata = {**doc.metadata, **{"score": score}}
         return [doc for (doc, _) in docs_and_scores]
