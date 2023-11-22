@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import requests
 import pandas as pd
@@ -85,10 +86,12 @@ class Client:
         file_ = {"file": open(file, "rb")}
         return self.fetch(url, files=file_, method="post")
     
-    def vectorize_file(self, file: str, chunk_size: int = 256, chunk_overlap: int = 50, embeddings=True):
+    def vectorize_file(self, file: str, chunk_size: int = 256, chunk_overlap: int = 50, meta: dict = {}, embeddings=True):
         if not isinstance(file, str):
             raise ValueError("file must be a string")
         url = f"/textprocessing/vectorizefile?chunk_size={chunk_size}&chunk_overlap={chunk_overlap}"
+        if meta:
+            url = url + "&meta=" + json.dumps(meta)
         file_ = {"file": open(file, "rb")}
         response = self.fetch(url, files=file_, method="post")
         if embeddings and "data" in response:
