@@ -35,7 +35,12 @@ class ChatOpenAI():
         return response
 
     def stream(self, messages: list[Message]):
+        content = ""
         response = self.chat(messages=messages, stream=True)
         for chunk in response:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            if not chunk.choices[0].finish_reason:
+                if chunk.choices[0].delta.content:
+                    content += chunk.choices[0].delta.content
+                    yield chunk.choices[0].delta.content
+            else:
+                yield Message(role="assistant", content=content)
