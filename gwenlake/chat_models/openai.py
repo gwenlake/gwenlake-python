@@ -43,4 +43,4 @@ class ChatOpenAI():
                     content += chunk.choices[0].delta.content
                     yield chunk.choices[0].delta.content
             else:
-                yield Message(role="assistant", content=content)
+                yield dict(role="assistant", content=content)
