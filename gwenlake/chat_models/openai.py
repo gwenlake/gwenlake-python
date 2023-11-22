@@ -14,12 +14,13 @@ class ChatOpenAI():
         self.model = model
         self.temperature = temperature
         if os.environ.get("OPENAI_API_TYPE") == "azure":
-            # print("OpenAI Azure mode.")
+            logger.warning("ChatOpenAI: Azure mode.")
             openai.api_key     = api_key or os.environ.get("OPENAI_API_KEY")
             openai.api_base    = api_base or os.environ.get("OPENAI_API_BASE")
             openai.api_type    = "azure"
             openai.api_version = "2023-05-15" 
         else:
+            logger.warning("ChatOpenAI: OpenAI mode.")
             openai.api_key = api_key or os.environ.get('OPENAI_API_KEY')
             if os.environ.get('OPENAI_API_ORGANIZATION'):
                 openai.organization = os.environ.get('OPENAI_API_ORGANIZATION')
