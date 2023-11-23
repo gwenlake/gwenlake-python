@@ -16,16 +16,16 @@ class ChatOpenAI():
         self.model = model
         self.temperature = temperature
 
-        openai.api_key = api_key or os.environ.get("OPENAI_API_KEY")
-
         if os.environ.get("OPENAI_API_TYPE") == "azure":
             logger.warning("ChatOpenAI: Azure mode.")
             _version  = api_version or os.environ.get("OPENAI_API_VERSION")
             _endpoint = azure_endpoint or os.environ.get("OPENAI_API_BASE")
-            self.client = openai.AzureOpenAI(api_version=_version, azure_endpoint=_endpoint)
+            _api_key  = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
+            self.client = openai.AzureOpenAI(api_key=_api_key, api_version=_version, azure_endpoint=_endpoint)
 
         else:
             logger.warning("ChatOpenAI: OpenAI mode.")
+            openai.api_key = api_key or os.environ.get("OPENAI_API_KEY")
             if os.environ.get('OPENAI_API_ORGANIZATION'):
                 openai.organization = os.environ.get('OPENAI_API_ORGANIZATION')
             self.client = openai.OpenAI()
