@@ -4,7 +4,7 @@ import uuid
 import openai
 from typing import Optional
 
-from gwenlake.schema import Message, ChatCompletion, Choice, ChoiceDelta
+from gwenlake.schema import Message, ChatCompletion, ChatCompletionChunk, Choice, ChoiceDelta, Usage
 
 
 logger = logging.getLogger(__name__)
@@ -41,21 +41,39 @@ class ChatOpenAI():
             return None
         if not response.choices[0].message.content:
             return None
-        return ChatCompletion(choices=[ Choice(message=Message(role="assistant", content=response.choices[0].message.content)) ])
+        return ChatCompletion(
+            model=self.model,
+            system_fingerprint=response.system_fingerprint,
+            choices=[ Choice(message=Message(role="assistant", content=response.choices[0].message.content)) ],
+            usage=Usage(
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens
+            )
+        )
 
 
     def stream(self, messages: list[Message]):
-        content = ""
         try:
             response = self.client.chat.completions.create(model=self.model, messages=messages, temperature=self.temperature, stream=True)
         except Exception as e:
             logger.error(e)
             return None
         _id = "chatcmpl-" + str(uuid.uuid4())
+        _content = ""
         for chunk in response:
             if not chunk.choices[0].finish_reason:
-                if chunk.choices[0].delta.content:
-                    content += chunk.choices[0].delta.content
-                    yield ChatCompletion(id=_id, choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ])
+                _content += chunk.choices[0].delta.content
+                yield ChatCompletionChunk(
+                    id=_id,
+                    model=self.model,
+                    choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
+                    finish_reason=None
+                )
             else:
-                yield ChatCompletion(id=_id, choices=[ Choice(message=Message(role="assistant", content=content)) ])
+                yield ChatCompletion(
+                    id=_id,
+                    model=self.model,
+                    choices=[ Choice(message=Message(role="assistant", content=_content)) ],
+                    finish_reason="stop"
+                )
