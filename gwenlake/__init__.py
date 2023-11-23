@@ -12,6 +12,7 @@ from gwenlake.client import Client
 from gwenlake.embeddings import get_embeddings
 from gwenlake.wrappers import langchain
 from gwenlake.chat import openai
+from gwenlake.memory import chat_memory
 
 
 __all__ = [
@@ -19,7 +20,8 @@ __all__ = [
     "Client",
     "get_embeddings",
     "langchain",
-    "openai"
+    "openai",
+    "chat_memory"
 ]
 
 api_key  = os.environ.get("GWENLAKE_API_KEY")
