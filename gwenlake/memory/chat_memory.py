@@ -1,12 +1,15 @@
 
+from abc import ABC
 from gwenlake.schema import Message
 from gwenlake.utils import num_tokens_from_string
 
 
-class ChatMemory:
+class ChatMemory(ABC):
  
     def __init__(self, messages: list[Message]):
-        self.messages = messages
+        self.messages = []
+        for message in messages:
+            self.messages.append(Message(role=message["role"], content=message["content"]))
 
     def clear(self):
         self.messages = []
