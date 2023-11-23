@@ -11,13 +11,15 @@ except metadata.PackageNotFoundError:
 from gwenlake.client import Client
 from gwenlake.embeddings import get_embeddings
 from gwenlake.wrappers import langchain
+from gwenlake.chat import openai
+
 
 __all__ = [
     "__version__",
     "Client",
     "get_embeddings",
-    "langchain"
-    
+    "langchain",
+    "openai"
 ]
 
 api_key  = os.environ.get("GWENLAKE_API_KEY")
