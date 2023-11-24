@@ -60,10 +60,7 @@ class ChatMemory(ABC):
                 break
             pruned_history.append(message)
             num_tokens += num_tokens_from_string(message.content)
-
-        if len(pruned_history)>0:
-            pruned_history.reverse()
+        pruned_history.reverse()
 
         self.messages = pruned_history
-
         return self.messages
