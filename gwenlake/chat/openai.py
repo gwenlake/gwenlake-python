@@ -63,13 +63,14 @@ class ChatOpenAI():
         _content = ""
         for chunk in response:
             if not chunk.choices[0].finish_reason:
-                _content += chunk.choices[0].delta.content
-                yield ChatCompletionChunk(
-                    id=_id,
-                    model=self.model,
-                    choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
-                    finish_reason=None
-                )
+                 if isinstance(chunk.choices[0].delta.content, str):
+                    _content += chunk.choices[0].delta.content
+                    yield ChatCompletionChunk(
+                        id=_id,
+                        model=self.model,
+                        choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
+                        finish_reason=None
+                    )
             else:
                 yield ChatCompletion(
                     id=_id,
