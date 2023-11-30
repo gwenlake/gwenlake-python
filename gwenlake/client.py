@@ -40,11 +40,11 @@ class Client:
         return r.json()
 
 
-    def upload_file(self, data_id: str, file: str):
+    def upload_file(self, team_name: str, project_name: str, file: str):
         if not isinstance(file, str):
             raise ValueError("file must be a string")
         path = os.path.dirname(file).strip(".").strip("/")
-        url = f"/data/{ data_id }/uploadfile?path={path}"
+        url = f"/files/{ team_name }/{ project_name }/upload?path={path}"
         file_ = {"file": open(file, "rb")}
         return self.fetch(url, files=file_, method="post")
 
