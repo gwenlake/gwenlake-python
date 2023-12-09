@@ -69,7 +69,13 @@ class GwenlakeEmbeddings(BaseModel, Embeddings):
             for i in range(0, len(texts), batch_size):
                 i_end = min(len(texts), i+batch_size)
                 batch = texts[i:i_end]
-                embeddings += self._embed(batch)
+                batch_processed = []
+                for text in batch:
+                    text = text.strip()
+                    if not text.startswith("passage: "):
+                        text = "passage: " + text
+                    batch_processed.append(text)
+                embeddings += self._embed(batch_processed)
         except:
             return None
         return embeddings
@@ -84,4 +90,7 @@ class GwenlakeEmbeddings(BaseModel, Embeddings):
         Returns:
             Embeddings for the text.
         """
+        text = text.strip()
+        if not text.startswith("query: "):
+            text = "query: " + text
         return self._embed([text])[0]
