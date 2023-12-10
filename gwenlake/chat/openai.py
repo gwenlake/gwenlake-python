@@ -68,13 +68,12 @@ class ChatOpenAI():
             if not chunk.choices[0].finish_reason:
                  if isinstance(chunk.choices[0].delta.content, str):
                     _content += chunk.choices[0].delta.content
-                    yield chunk.choices[0].delta.content
-                    # yield ChatCompletionChunk(
-                    #     id=_id,
-                    #     model=self.model,
-                    #     choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
-                    #     finish_reason=None,
-                    # )
+                    yield ChatCompletionChunk(
+                        id=_id,
+                        model=self.model,
+                        choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
+                        finish_reason=None,
+                    )
             else:
                 usage = Usage()
                 usage.prompt_tokens = num_tokens_from_messages(messages)
