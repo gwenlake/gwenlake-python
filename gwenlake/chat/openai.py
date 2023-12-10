@@ -59,7 +59,8 @@ class ChatOpenAI():
             response = self.client.chat.completions.create(model=self.model, messages=messages, temperature=self.temperature, stream=True)
         except Exception as e:
             logger.error(e)
-            return None
+            yield ""
+    
         _id = "chatcmpl-" + str(uuid.uuid4())
         _content = ""
 
