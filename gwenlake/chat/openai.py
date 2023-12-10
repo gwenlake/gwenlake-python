@@ -65,26 +65,27 @@ class ChatOpenAI():
         _content = ""
 
         for chunk in response:
-            yield chunk
-            # if not chunk.choices[0].finish_reason:
-            #      if isinstance(chunk.choices[0].delta.content, str):
-            #         _content += chunk.choices[0].delta.content
-            #         yield ChatCompletionChunk(
-            #             id=_id,
-            #             model=self.model,
-            #             choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
-            #             finish_reason=None,
-            #         )
-            # else:
-            #     usage = Usage()
-            #     usage.prompt_tokens = num_tokens_from_messages(messages)
-            #     usage.completion_tokens = num_tokens_from_string(_content)
-            #     usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
-            #     yield ChatCompletion(
-            #         id=_id,
-            #         model=self.model,
-            #         choices=[ Choice(message=Message(role="assistant", content=_content)) ],
-            #         finish_reason="stop",
-            #         usage=usage
-            #     )
+            if not chunk.choices[0].finish_reason:
+                 if isinstance(chunk.choices[0].delta.content, str):
+                    _content += chunk.choices[0].delta.content
+                    yield chunk.choices[0].delta.content
+                    # yield ChatCompletionChunk(
+                    #     id=_id,
+                    #     model=self.model,
+                    #     choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
+                    #     finish_reason=None,
+                    # )
+            else:
+                usage = Usage()
+                usage.prompt_tokens = num_tokens_from_messages(messages)
+                usage.completion_tokens = num_tokens_from_string(_content)
+                usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
+                resp = ChatCompletion(
+                    id=_id,
+                    model=self.model,
+                    choices=[ Choice(message=Message(role="assistant", content=_content)) ],
+                    finish_reason="stop",
+                    usage=usage
+                )
+                yield resp.dict()
 
