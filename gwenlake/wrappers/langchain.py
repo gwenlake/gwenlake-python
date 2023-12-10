@@ -54,26 +54,26 @@ class SelfQueryRetrieverWithScores(SelfQueryRetriever):
         return [doc for (doc, _) in docs_and_scores]
 
 
-class GwenlakeEmbedding(BaseModel, Embeddings):
-    def __init__(self, **kwargs: Any):
-        """Initialize the sentence_transformer."""
-        super().__init__(**kwargs)
+# class GwenlakeEmbedding(BaseModel, Embeddings):
+#     def __init__(self, **kwargs: Any):
+#         """Initialize the sentence_transformer."""
+#         super().__init__(**kwargs)
 
-    class Config:
-        """Configuration for this pydantic object."""
-        extra = Extra.forbid
+#     class Config:
+#         """Configuration for this pydantic object."""
+#         extra = Extra.forbid
 
    
-    def embed_documents(self, texts: List[str], chunk_size: Optional[int] = 0) -> List[List[float]]:
-        res = gwenlake.get_embeddings(texts)
-        print(res)
-        return  res
+#     def embed_documents(self, texts: List[str], chunk_size: Optional[int] = 0) -> List[List[float]]:
+#         res = gwenlake.get_embeddings(texts)
+#         print(res)
+#         return  res
 
-    async def aembed_documents(self, texts: List[str], chunk_size: Optional[int] = 0) -> List[List[float]]:
-       return await  gwenlake.get_embeddings(texts)
+#     async def aembed_documents(self, texts: List[str], chunk_size: Optional[int] = 0) -> List[List[float]]:
+#        return await  gwenlake.get_embeddings(texts)
 
-    def embed_query(self, text: str) -> List[float]:
-        return gwenlake.get_embeddings([text])[0]
+#     def embed_query(self, text: str) -> List[float]:
+#         return gwenlake.get_embeddings([text])[0]
 
-    async def aembed_query(self, text: str) -> List[float]:
-        return  gwenlake.get_embeddings([text])[0]
+#     async def aembed_query(self, text: str) -> List[float]:
+#         return  gwenlake.get_embeddings([text])[0]

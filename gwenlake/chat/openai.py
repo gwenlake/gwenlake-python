@@ -5,7 +5,7 @@ import openai
 from typing import Optional
 
 from gwenlake.schema import Message, ChatCompletion, ChatCompletionChunk, Choice, ChoiceDelta, Usage
-
+from gwenlake.utils import num_tokens_from_string, num_tokens_from_messages
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ class ChatOpenAI():
             return None
         if not response.choices[0].message.content:
             return None
+
         return ChatCompletion(
             model=self.model,
             system_fingerprint=response.system_fingerprint,
@@ -61,6 +62,7 @@ class ChatOpenAI():
             return None
         _id = "chatcmpl-" + str(uuid.uuid4())
         _content = ""
+
         for chunk in response:
             if not chunk.choices[0].finish_reason:
                  if isinstance(chunk.choices[0].delta.content, str):
@@ -69,12 +71,18 @@ class ChatOpenAI():
                         id=_id,
                         model=self.model,
                         choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
-                        finish_reason=None
+                        finish_reason=None,
                     )
             else:
+                usage = Usage()
+                usage.prompt_tokens = num_tokens_from_messages(messages)
+                usage.completion_tokens = num_tokens_from_string(_content)
+                usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
                 yield ChatCompletion(
                     id=_id,
                     model=self.model,
                     choices=[ Choice(message=Message(role="assistant", content=_content)) ],
-                    finish_reason="stop"
+                    finish_reason="stop",
+                    usage=usage
                 )
+
