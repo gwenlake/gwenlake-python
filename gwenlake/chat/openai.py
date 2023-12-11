@@ -75,6 +75,6 @@ class ChatOpenAI():
                 usage.prompt_tokens = num_tokens_from_messages(messages)
                 usage.completion_tokens = num_tokens_from_string(content)
                 usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
-                chunk["usage"] = usage
+                chunk["usage"] = usage.dict()
                 yield chunk
 
