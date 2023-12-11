@@ -56,3 +56,36 @@ response = llm.chat(prompt)
 >> The next Olympic Games will be in Paris in 2024.
 
 ```
+
+
+## Embeddings
+
+Use our inference platform for embeddings using [intfloat/e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) or [intfloat/e5-base-v2](https://huggingface.co/intfloat/multilingual-e5-base)
+
+```python
+import pandas as pd
+import gwenlake
+from gwenlake.embeddings.langchain import GwenlakeEmbeddings
+
+gwenlake.api_key = "sk-..."
+
+list_of_texts = [
+    "Olympic Games will be in Paris in 2024",
+    "Do Not Watch This Movie! Not funny at all",
+    "Can you help me write an email to my best friend?",
+]
+
+
+# default intfloat/e5-base-v2 model
+embeddings = GwenlakeEmbeddings()
+
+query_result = embeddings.embed_query(list_of_texts[0])
+print(query_result[:5])
+
+
+# multilingual intfloat/multilingual-e5-base model
+embeddings = GwenlakeEmbeddings(model_name="intfloat/multilingual-e5-base")
+
+query_result = embeddings.embed_documents(list_of_texts)
+print(pd.DataFrame(query_result))
+```
