@@ -41,11 +41,15 @@ import gwenlake
 
 gwenlake.api_key = "sk-..."
 
+# get a prompt from the hub
 prompt_template = gwenlake.hub.pull("gwenlake/prompts/rag-prompt")
+
+# format the prompt using variables
 prompt = prompt_template.format(
     context="Olympic Games will be in Paris in 2024",
     question="Where will be the next OlympicG?")
 
+# Send to ChatGPT and get answer
 llm = gwenlake.chat.ChatOpenAI()
 response = llm.chat(prompt)
 
