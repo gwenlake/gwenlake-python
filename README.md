@@ -18,7 +18,7 @@ pip install -U git+https://github.com/gwenlake/gwenlake-python
 
 ## Usage
 
-The library needs to be configured with your account's secret key which is available on the [website](https://console.gwenlake.com/account). Either set it as the `GWENLAKE_API_KEY` environment variable before using the library:
+The library needs to be configured with your account's secret key. Either set it as the `GWENLAKE_API_KEY` environment variable before using the library:
 
 ```bash
 export GWENLAKE_API_KEY='sk-...'
@@ -28,6 +28,7 @@ Or set `gwenlake.api_key` to its value:
 
 ```python
 import gwenlake
+
 gwenlake.api_key = "sk-..."
 ```
 
