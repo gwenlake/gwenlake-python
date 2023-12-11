@@ -61,31 +61,19 @@ class ChatOpenAI():
             logger.error(e)
             yield ""
     
-        _id = "chatcmpl-" + str(uuid.uuid4())
-        _content = ""
+        content = ""
 
         for chunk in response:
             if not chunk.choices[0].finish_reason:
-                 if isinstance(chunk.choices[0].delta.content, str):
-                    _content += chunk.choices[0].delta.content
-                    yield chunk.choices[0].delta.content
-                    # yield ChatCompletionChunk(
-                    #     id=_id,
-                    #     model=self.model,
-                    #     choices=[ ChoiceDelta(delta=Message(role="assistant", content=chunk.choices[0].delta.content)) ],
-                    #     finish_reason=None,
-                    # )
+                if chunk.choices[0].delta.content:
+                    content += chunk.choices[0].delta.content
+                yield chunk.dict()
             else:
+                chunk = chunk.dict()
                 usage = Usage()
                 usage.prompt_tokens = num_tokens_from_messages(messages)
-                usage.completion_tokens = num_tokens_from_string(_content)
+                usage.completion_tokens = num_tokens_from_string(content)
                 usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
-                resp = ChatCompletion(
-                    id=_id,
-                    model=self.model,
-                    choices=[ Choice(message=Message(role="assistant", content=_content)) ],
-                    finish_reason="stop",
-                    usage=usage
-                )
-                yield resp.dict()
+                chunk["usage"] = usage
+                yield chunk
 
