@@ -2,7 +2,7 @@ import os
 import logging
 import uuid
 import openai
-from typing import Optional
+from typing import Optional, Union
 
 from gwenlake.schema import Message, ChatCompletion, ChatCompletionChunk, Choice, ChoiceDelta, Usage
 from gwenlake.utils import num_tokens_from_string, num_tokens_from_messages
@@ -32,9 +32,18 @@ class ChatOpenAI():
             self.model = model
             self.client = openai.OpenAI()
 
+    def _format_messages(self, input: Union[list[Message], Message, str]):
+        if isinstance(input, list):
+            return input        
+        elif isinstance(input, Message):
+            return [input]
+        elif isinstance(input, str):
+            return [ Message(role="user", content=input)]
+        return None
 
-    def chat(self, messages: list[Message]):
+    def chat(self, messages: Union[list[Message], Message, str]):
         try:
+            messages = self._format_messages(messages)
             response = self.client.chat.completions.create(model=self.model, messages=messages, temperature=self.temperature)
         except Exception as e:
             logger.error(e)
@@ -43,20 +52,9 @@ class ChatOpenAI():
             return None
         return response.dict()
 
-        # return ChatCompletion(
-        #     model=self.model,
-        #     system_fingerprint=response.system_fingerprint,
-        #     choices=[ Choice(message=Message(role="assistant", content=response.choices[0].message.content)) ],
-        #     usage=Usage(
-        #         prompt_tokens=response.usage.prompt_tokens,
-        #         completion_tokens=response.usage.completion_tokens,
-        #         total_tokens=response.usage.total_tokens
-        #     )
-        # )
-
-
-    def stream(self, messages: list[Message]):
+    def stream(self, messages: Union[list[Message], Message, str]):
         try:
+            messages = self._format_messages(messages)
             response = self.client.chat.completions.create(model=self.model, messages=messages, temperature=self.temperature, stream=True)
         except Exception as e:
             logger.error(e)
