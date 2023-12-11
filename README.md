@@ -77,14 +77,14 @@ list_of_texts = [
 ]
 
 
-# default intfloat/e5-base-v2 model
+# default e5-base-v2 model
 embeddings = GwenlakeEmbeddings()
 
 query_result = embeddings.embed_query(list_of_texts[0])
 print(query_result[:5])
 
 
-# multilingual intfloat/multilingual-e5-base model
+# multilingual multilingual-e5-base model
 embeddings = GwenlakeEmbeddings(model_name="multilingual-e5-base")
 
 query_result = embeddings.embed_documents(list_of_texts)
