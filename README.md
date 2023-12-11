@@ -43,7 +43,7 @@ import gwenlake
 gwenlake.api_key = "sk-..."
 
 # get a prompt from the hub
-prompt_template = gwenlake.hub.pull("gwenlake/prompts/rag-prompt")
+prompt_template = gwenlake.hub.pull("gwenlake/prompts/rag")
 
 # format the prompt using variables
 prompt = prompt_template.format(
