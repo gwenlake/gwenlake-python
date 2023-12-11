@@ -16,7 +16,7 @@ def pull(path):
     api_base = gwenlake.api_base
     if not api_key or not api_base:
         return None
-    url = f"{api_base}/hub/{path}"
+    url = f"{api_base}{path}"
     headers = { "Authorization": f"Bearer {api_key}" }
 
     r = requests.get(url, headers=headers, timeout=TIMEOUT)

@@ -43,7 +43,7 @@ import gwenlake
 gwenlake.api_key = "sk-..."
 
 # get a prompt from the hub
-prompt_template = gwenlake.hub.pull("gwenlake/prompts/rag")
+prompt_template = gwenlake.hub.pull("/prompts/gwenlake/rag")
 
 # format the prompt using variables
 prompt = prompt_template.format(
@@ -85,7 +85,7 @@ print(query_result[:5])
 
 
 # multilingual intfloat/multilingual-e5-base model
-embeddings = GwenlakeEmbeddings(model_name="intfloat/multilingual-e5-base")
+embeddings = GwenlakeEmbeddings(model_name="multilingual-e5-base")
 
 query_result = embeddings.embed_documents(list_of_texts)
 print(pd.DataFrame(query_result))
