@@ -90,3 +90,23 @@ embeddings = GwenlakeEmbeddings(model_name="multilingual-e5-base")
 query_result = embeddings.embed_documents(list_of_texts)
 print(pd.DataFrame(query_result))
 ```
+
+
+## Text Processing
+
+Use our inference platform for automated text processing: PDF -> text -> chunks -> embeddings.
+
+```python
+import gwenlake
+
+gwenlake.api_key = "sk-..."
+
+# Simple PDF to Text reader
+r = gwenlake.Client().textreader(file="file.pdf")
+print(r)
+
+# Advanced vectorizer (PDF -> text -> chunks -> embeddings)
+r = gwenlake.Client().vectorize_file(file="file.pdf", chunk_size=500, chunk_overlap=100)
+print(r)
+
+```
