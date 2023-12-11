@@ -41,17 +41,18 @@ class ChatOpenAI():
             return None
         if not response.choices[0].message.content:
             return None
+        return response.dict()
 
-        return ChatCompletion(
-            model=self.model,
-            system_fingerprint=response.system_fingerprint,
-            choices=[ Choice(message=Message(role="assistant", content=response.choices[0].message.content)) ],
-            usage=Usage(
-                prompt_tokens=response.usage.prompt_tokens,
-                completion_tokens=response.usage.completion_tokens,
-                total_tokens=response.usage.total_tokens
-            )
-        )
+        # return ChatCompletion(
+        #     model=self.model,
+        #     system_fingerprint=response.system_fingerprint,
+        #     choices=[ Choice(message=Message(role="assistant", content=response.choices[0].message.content)) ],
+        #     usage=Usage(
+        #         prompt_tokens=response.usage.prompt_tokens,
+        #         completion_tokens=response.usage.completion_tokens,
+        #         total_tokens=response.usage.total_tokens
+        #     )
+        # )
 
 
     def stream(self, messages: list[Message]):
