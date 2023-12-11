@@ -60,7 +60,7 @@ response = llm.chat(prompt)
 
 ## Embeddings
 
-Use our inference platform for embeddings using [intfloat/e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) or [intfloat/e5-base-v2](https://huggingface.co/intfloat/multilingual-e5-base)
+Use our inference platform for embeddings using [intfloat/e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) or the multilingual [intfloat/multilingual-e5-base](https://huggingface.co/intfloat/multilingual-e5-base) model (supports 100 languages).
 
 ```python
 import pandas as pd
