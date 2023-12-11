@@ -94,7 +94,7 @@ print(pd.DataFrame(query_result))
 
 ## Text Processing
 
-Use our inference platform for automated text processing: PDF -> text -> chunks -> embeddings.
+Use our inference platform for automated text processing (pdf to text, text to chunks and embeddings).
 
 ```python
 import gwenlake
