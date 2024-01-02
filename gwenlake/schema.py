@@ -1,8 +1,10 @@
 
 from pydantic import BaseModel, Field
-from typing import Optional, Union
+from typing import Optional, Union, List
+from typing_extensions import Literal
 from uuid import uuid4
 from datetime import datetime
+
 
 class Message(BaseModel):
     role: str
@@ -39,3 +41,15 @@ class ChatCompletionChunk(BaseModel):
     model: Optional[str] = None
     system_fingerprint: Optional[str] = None
     choices: list[ChoiceDelta]
+
+
+class Embedding(BaseModel):
+    embedding: List[float]
+    index: int
+    object: Literal["embedding"]
+
+class EmbeddingResponse(BaseModel):
+    data: List[Embedding]
+    model: str
+    object: Literal["list"]
+    usage: Usage
