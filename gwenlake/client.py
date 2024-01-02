@@ -111,26 +111,6 @@ class Client:
     @property
     def models(self) -> Models:
         return Models(client=self)
-    
-    # def upload_data(self, data_id: str, data: []):
-    #     url = f"/data/{ data_id }/uploaddata"
-    #     payload = { "data": data }
-    #     return self.fetch(url, payload=payload, method="post")
-            
-    # def list_models(self):
-    #     resp = self.fetch("/models")
-    #     if resp:
-    #         return resp["data"]
-    #     return None
-
-    # def run_model(self, model_id, inputs):
-    #     response = self.fetch(f"/models/{model_id}", payload=inputs, method="post")
-    #     if response:
-    #         return response["data"]
-    #     return None
-
-
-
 
 
 # Adapted from https://github.com/encode/httpx/issues/108#issuecomment-1132753155
