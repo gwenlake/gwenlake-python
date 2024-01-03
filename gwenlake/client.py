@@ -5,21 +5,18 @@ from datetime import datetime
 import httpx
 import logging
 import pandas as pd
-from typing import Any, Optional, List, Mapping, Type, Union, Iterable, Iterator, AsyncIterator
+from typing import Any, Optional, List, Dict, Any, Mapping, Type, Union, Iterable, Iterator
 
 from . import __version__
 from .exceptions import GwenlakeError
-from .constants import (
-    DEFAULT_LIMITS,
-    DEFAULT_TIMEOUT,
-    DEFAULT_MAX_RETRIES,
-)
+from .constants import DEFAULT_TIMEOUT
 
 from .embeddings import Embeddings
 from .files import Files
 from .hub import Hub
 from .textprocessing import TextProcessing
 from .models import Models
+from .chat import Chat
 
 
 logger = logging.getLogger(__name__)
@@ -81,7 +78,7 @@ class Client:
                 **self._client_kwargs,
             )  # type: ignore[assignment]
         return self.__async_client  # type: ignore[return-value]
-    
+
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         resp = self._client.request(method, path, **kwargs)
         _raise_for_status(resp)
@@ -91,7 +88,12 @@ class Client:
         resp = await self._async_client.request(method, path, **kwargs)
         _raise_for_status(resp)
         return resp
-    
+
+    def _stream(self, method: str, path: str, **kwargs) -> Iterator[Dict[str, Any]]:
+        with self._client.stream(method, path, **kwargs) as resp:
+            for streamed_response in resp.iter_lines():
+                yield streamed_response
+
     @property
     def embeddings(self) -> Embeddings:
         return Embeddings(client=self)
@@ -111,6 +113,10 @@ class Client:
     @property
     def models(self) -> Models:
         return Models(client=self)
+
+    @property
+    def chat(self) -> Chat:
+        return Chat(client=self)
 
 
 # Adapted from https://github.com/encode/httpx/issues/108#issuecomment-1132753155

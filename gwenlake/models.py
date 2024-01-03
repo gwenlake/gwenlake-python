@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-# import base64
-from typing import TYPE_CHECKING, List, Union
-from typing_extensions import Literal
+from typing import TYPE_CHECKING
 
-
-from .resource import SyncAPIResource
+from .resource import Resource
 
 if TYPE_CHECKING:
     from .client import Client
@@ -15,7 +12,7 @@ __all__ = ["Models"]
 
 
 
-class Models(SyncAPIResource):
+class Models(Resource):
 
     def __init__(self, client: Client) -> None:
         super().__init__(client)

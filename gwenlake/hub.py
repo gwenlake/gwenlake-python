@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from langchain.prompts import PromptTemplate
 
 
-from .resource import SyncAPIResource
+from .resource import Resource
 
 if TYPE_CHECKING:
     from .client import Client
@@ -15,18 +15,18 @@ __all__ = ["Hub"]
 
 
 
-class Hub(SyncAPIResource):
+class Hub(Resource):
 
     def __init__(self, client: Client) -> None:
         super().__init__(client)
 
-    def pull(self, repo: str):
-        resp = self._client._request("GET", f"/hub/{ repo }")
-        resp.raise_for_status()
+    def pull(self, ref: str):
+        
+        resp = self._client._request("GET", f"/hub/{ ref }")
 
-        data = resp.json()
+        obj = resp.json()
 
-        if data.get("object") == "prompt" and data.get("template"):
-            return PromptTemplate.from_template(data["template"])
+        if obj.get("object") == "prompt" and obj.get("template"):
+            return PromptTemplate.from_template(obj["template"])
 
-        return data
+        return obj

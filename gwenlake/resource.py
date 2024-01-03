@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from .client import Client
 
 
-class SyncAPIResource:
+class Resource:
 
     _client: Client
 

@@ -42,7 +42,6 @@ class ChatCompletionChunk(BaseModel):
     system_fingerprint: Optional[str] = None
     choices: list[ChoiceDelta]
 
-
 class Embedding(BaseModel):
     embedding: List[float]
     index: int
