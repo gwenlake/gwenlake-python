@@ -18,6 +18,8 @@ from .textprocessing import TextProcessing
 from .models import Models
 from .chat import Chat
 
+import gwenlake
+
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,8 @@ class Client:
         super().__init__()
 
         if api_key is None:
+            api_key = gwenlake.api_key
+        if api_key is None:
             api_key = os.environ.get("GWENLAKE_API_KEY")
         if api_key is None:
             raise GwenlakeError(
@@ -45,6 +49,8 @@ class Client:
             )
         self._api_key = api_key
 
+        if base_url is None:
+            base_url = gwenlake.base_url
         if base_url is None:
             base_url = os.environ.get("GWENLAKE_BASE_URL")
         if base_url is None:

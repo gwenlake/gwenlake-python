@@ -16,6 +16,6 @@ __all__ = [
     "Client",
 ]
 
-api_key  = os.environ.get("GWENLAKE_API_KEY")
-api_base = os.environ.get("GWENLAKE_API_BASE") or "https://api.gwenlake.com/v1"
+api_key: str | None = None
 
+base_url: str | None = None

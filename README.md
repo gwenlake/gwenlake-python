@@ -32,6 +32,14 @@ import gwenlake
 gwenlake.api_key = "sk-..."
 ```
 
+Or set `api_key` to its value with the Client:
+
+```python
+import gwenlake
+
+client = gwenlake.client(api_key = "sk-...")
+```
+
 
 ## Hub
 
@@ -40,10 +48,10 @@ Discover and share prompts in the Gwenlake Hub.
 ```python
 import gwenlake
 
-gwenlake.api_key = "sk-..."
+client = gwenlake.Client(api_key = "sk-...")
 
 # get a prompt from the hub
-prompt_template = gwenlake.hub.pull("/prompts/gwenlake/rag")
+prompt_template = client.hub.pull("/prompts/gwenlake/rag")
 
 # format the prompt using variables
 prompt = prompt_template.format(
@@ -51,7 +59,7 @@ prompt = prompt_template.format(
     question="Where will be the next OlympicG?")
 
 # Send to ChatGPT and get answer
-llm = gwenlake.chat.ChatOpenAI()
+llm = client.chat.create()
 response = llm.chat(prompt)
 
 >> The next Olympic Games will be in Paris in 2024.
