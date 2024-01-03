@@ -257,8 +257,8 @@ def _build_httpx_client(
 ) -> Union[httpx.Client, httpx.AsyncClient]:
     headers = {
         "User-Agent": f"gwenlake-python/{__version__}",
+        "Authorization": f"Bearer {api_key}",
     }
-    headers["Authorization"] = f"Bearer {api_key}"
 
     transport = kwargs.pop("transport", None) or (
         httpx.HTTPTransport()
