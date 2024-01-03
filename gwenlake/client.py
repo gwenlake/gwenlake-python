@@ -94,6 +94,11 @@ class Client:
             for streamed_response in resp.iter_lines():
                 yield streamed_response
 
+    async def _async_stream(self, method: str, path: str, **kwargs) -> Iterator[Dict[str, Any]]:
+        async with self._client.stream(method, path, **kwargs) as resp:
+            async for streamed_response in resp.iter_lines():
+                yield streamed_response
+
     @property
     def embeddings(self) -> Embeddings:
         return Embeddings(client=self)
