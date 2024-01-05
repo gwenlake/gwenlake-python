@@ -43,27 +43,15 @@ client = gwenlake.client(api_key = "sk-...")
 
 ## Hub
 
-Discover and share prompts in the Gwenlake Hub.
+Discover and share in the Gwenlake Hub.
 
 ```python
 import gwenlake
 
-client = gwenlake.Client(api_key = "sk-...")
+client = gwenlake.Client()
 
-# get a prompt from the hub
-prompt_template = client.hub.pull("/prompts/gwenlake/rag")
-
-# format the prompt using variables
-prompt = prompt_template.format(
-    context="Olympic Games will be in Paris in 2024",
-    question="Where will be the next OlympicG?")
-
-# Send to ChatGPT and get answer
-llm = client.chat.create()
-response = llm.chat(prompt)
-
->> The next Olympic Games will be in Paris in 2024.
-
+response = client.hub.list()
+print(response)
 ```
 
 
@@ -74,9 +62,6 @@ Use our inference platform for embeddings using [intfloat/e5-base-v2](https://hu
 ```python
 import pandas as pd
 import gwenlake
-from gwenlake.embeddings.langchain import GwenlakeEmbeddings
-
-gwenlake.api_key = "sk-..."
 
 list_of_texts = [
     "Olympic Games will be in Paris in 2024",
@@ -84,19 +69,11 @@ list_of_texts = [
     "Can you help me write an email to my best friend?",
 ]
 
+client = gwenlake.Client()
 
-# default e5-base-v2 model
-embeddings = GwenlakeEmbeddings()
-
-query_result = embeddings.embed_query(list_of_texts[0])
-print(query_result[:5])
-
-
-# multilingual-e5-base model
-embeddings = GwenlakeEmbeddings(model_name="multilingual-e5-base")
-
-query_result = embeddings.embed_documents(list_of_texts)
-print(pd.DataFrame(query_result))
+response = client.embeddings.create(input=list_of_texts, model="e5-base-v2")
+for item in response.data:
+    print(pd.DataFrame(item.embedding))
 ```
 
 
@@ -107,14 +84,31 @@ Use our inference platform for automated text processing (pdf to text, text to c
 ```python
 import gwenlake
 
-gwenlake.api_key = "sk-..."
+client = gwenlake.Client()
 
-# Simple PDF to Text reader
-r = gwenlake.Client().textreader(file="file.pdf")
+# PDF to Text reader
+r = client.textprocessing.textreader(file="file.pdf")
+print(pd.DataFrame(r["data"]))
+
+# Vectorizer (PDF -> text -> chunks -> embeddings)
+r = client.textprocessing.vectorizer(file="file.pdf")
+print(pd.DataFrame(r["data"]))
+
+```
+
+
+## Run models
+
+Use our inference platform to run models available on the hub.
+
+```python
+import gwenlake
+
+client = gwenlake.Client()
+
+r = client.models.list()
 print(r)
 
-# Advanced vectorizer (PDF -> text -> chunks -> embeddings)
-r = gwenlake.Client().vectorize_file(file="file.pdf", chunk_size=500, chunk_overlap=100)
+r = client.models.run(input="Olympic Games will be in Paris in 2024", model="gwenlake/e5-base-v2")
 print(r)
-
 ```

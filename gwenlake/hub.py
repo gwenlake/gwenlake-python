@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from langchain.prompts import PromptTemplate
@@ -19,6 +20,14 @@ class Hub(Resource):
 
     def __init__(self, client: Client) -> None:
         super().__init__(client)
+
+
+
+    def list(self, ref: str):
+        resp = self._client._request("GET", f"/hub/{ ref }")
+        obj = resp.json()
+        return obj
+
 
     def pull(self, ref: str):
         

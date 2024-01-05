@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 # import base64
-from typing import TYPE_CHECKING, List, Union, Iterable, Any
+import json
+from typing import TYPE_CHECKING, List, Union, Iterable, Any, Optional
 from typing_extensions import Literal
 
 from .resource import Resource
@@ -23,12 +24,15 @@ class Chat(Resource):
         self,
         messages: List,
         model: Union[str, Literal["gpt-35-turbo-16k"]],
+        data: Optional[str] = None, 
     ):
         
         payload = {
             "messages": messages,
             "model": model,
         }
+        if data:
+            payload["data"] = data
 
         resp = self._client._request("POST", "/chat/completions", json=payload)            
         return resp.json()
@@ -38,6 +42,7 @@ class Chat(Resource):
         self,
         messages: List,
         model: Union[str, Literal["gpt-35-turbo-16k"]],
+        data: Optional[str] = None, 
     ):
         
         payload = {
@@ -45,8 +50,10 @@ class Chat(Resource):
             "model": model,
             "stream": True,
         }
+        if data:
+            payload["data"] = data
 
         resp = self._client._stream("POST", "/chat/completions", json=payload)
         for streamed_response in resp:
-            yield streamed_response
+            yield json.loads(streamed_response)
  

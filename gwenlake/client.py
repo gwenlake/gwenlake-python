@@ -16,6 +16,7 @@ from .files import Files
 from .hub import Hub
 from .textprocessing import TextProcessing
 from .models import Models
+from .data import Data
 from .chat import Chat
 
 import gwenlake
@@ -124,6 +125,10 @@ class Client:
     @property
     def models(self) -> Models:
         return Models(client=self)
+
+    @property
+    def data(self) -> Data:
+        return Data(client=self)
 
     @property
     def chat(self) -> Chat:
