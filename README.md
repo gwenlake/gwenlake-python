@@ -112,3 +112,23 @@ print(r)
 r = client.models.run(input="Olympic Games will be in Paris in 2024", model="gwenlake/e5-base-v2")
 print(r)
 ```
+
+
+## Share files
+
+Use our inference platform to upload and share files on the hub.
+
+```python
+import gwenlake
+
+client = gwenlake.Client()
+
+r = client.files.upload("myteam/myproject", file="test.pdf")
+print(r)
+
+r = client.files.list("myteam/myproject", file="/docs")
+print(r)
+
+file = client.files.retrieve("myteam/myproject", file="test.pdf")
+
+```
