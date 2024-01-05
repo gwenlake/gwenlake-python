@@ -13,8 +13,9 @@ list_of_texts = [
     "Everything about this movie is horrible, from the acting to the editing.",
 ]
 
-gwenlake.api_key = os.getenv("GWENLAKE_API_KEY")
-embeddings = gwenlake.Client().get_embeddings(list_of_texts)
-print(pd.DataFrame(embeddings))
+client = gwenlake.Client()
 
+response = client.embeddings.create(input=list_of_texts, model="e5-base-v2")
+for item in response.data:
+    print(pd.DataFrame(item.embedding))
 
