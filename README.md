@@ -54,10 +54,28 @@ response = client.hub.list()
 print(response)
 ```
 
+## Share files
+
+Upload and share files on the hub.
+
+```python
+import gwenlake
+
+client = gwenlake.Client()
+
+r = client.files.upload("myteam/myproject", file="test.pdf")
+print(r)
+
+r = client.files.list("myteam/myproject", file="/docs")
+print(r)
+
+file = client.files.retrieve("myteam/myproject", file="test.pdf")
+```
 
 ## Embeddings
 
-Use our inference platform for embeddings using [intfloat/e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) or the multilingual [intfloat/multilingual-e5-base](https://huggingface.co/intfloat/multilingual-e5-base) model (supports 100 languages).
+Use our inference platform for embeddings using [intfloat/e5-base-v2](https://huggingface.co/intfloat/e5-base-v2)
+or the multilingual [intfloat/multilingual-e5-base](https://huggingface.co/intfloat/multilingual-e5-base) model (supports 100 languages).
 
 ```python
 import pandas as pd
@@ -96,10 +114,9 @@ print(r)
 
 ```
 
-
 ## Run models
 
-Use our inference platform to run models available on the hub.
+Use our inference platform to run public or private models from the hub.
 
 ```python
 import gwenlake
@@ -116,29 +133,9 @@ r = client.models.run(
 print(r)
 ```
 
-
-## Share files
-
-Use our inference platform to upload and share files on the hub.
-
-```python
-import gwenlake
-
-client = gwenlake.Client()
-
-r = client.files.upload("myteam/myproject", file="test.pdf")
-print(r)
-
-r = client.files.list("myteam/myproject", file="/docs")
-print(r)
-
-file = client.files.retrieve("myteam/myproject", file="test.pdf")
-
-```
-
 ## Upload documents
 
-Use our platform to upload documents.
+Use our platform to upload documents in vector databases.
 
 ```python
 import gwenlake
