@@ -109,7 +109,10 @@ client = gwenlake.Client()
 r = client.models.list()
 print(r)
 
-r = client.models.run(input="Olympic Games will be in Paris in 2024", model="gwenlake/e5-base-v2")
+r = client.models.run(
+    input="Olympic Games will be in Paris in 2024",
+    model="gwenlake/e5-base-v2",
+    )
 print(r)
 ```
 
@@ -133,6 +136,33 @@ file = client.files.retrieve("myteam/myproject", file="test.pdf")
 
 ```
 
+## Upload documents
+
+Use our platform to upload documents.
+
+```python
+import gwenlake
+
+client = gwenlake.Client()
+
+data = [
+    {
+        "id": "test01",
+        "title": "hello",
+        "description": "Lorem ipsum dolor sit amet"
+    },
+    {
+        "id": "test02",
+        "title": "hello",
+        "description": "consectetur adipiscing elit"
+    }
+]
+
+client = gwenlake.Client()
+
+r = client.data.upload("myteam/documents", data=data)
+print(r)
+```
 
 ## Chat
 
