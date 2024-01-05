@@ -143,8 +143,6 @@ Use our platform to upload documents.
 ```python
 import gwenlake
 
-client = gwenlake.Client()
-
 data = [
     {
         "id": "test01",
