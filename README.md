@@ -88,11 +88,11 @@ client = gwenlake.Client()
 
 # PDF to Text reader
 r = client.textprocessing.textreader(file="file.pdf")
-print(pd.DataFrame(r["data"]))
+print(r)
 
 # Vectorizer (PDF -> text -> chunks -> embeddings)
 r = client.textprocessing.vectorizer(file="file.pdf")
-print(pd.DataFrame(r["data"]))
+print(r)
 
 ```
 
