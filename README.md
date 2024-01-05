@@ -9,7 +9,7 @@ with a wide range of versions of the Gwenlake API.
 
 ## Installation
 
-YIf you just want to use the package, just run:
+If you just want to use the package, just run:
 
 ```sh
 pip install -U git+https://github.com/gwenlake/gwenlake-python
