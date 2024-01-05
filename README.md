@@ -132,3 +132,36 @@ print(r)
 file = client.files.retrieve("myteam/myproject", file="test.pdf")
 
 ```
+
+
+## Chat
+
+Use our inference platform to chat.
+
+```python
+import gwenlake
+
+client = gwenlake.Client()
+
+messages = [
+    {
+        "role": "user",
+        "content": "Anything about France?"
+    }
+]
+
+# No streaming
+r = client.chat.create(model="gpt-35-turbo-16k", messages=messages)
+print(r)
+
+# Streaming
+stream = client.chat.stream(model="gpt-35-turbo-16k", messages=messages)
+for chunk in stream:
+    if chunk["choices"][0]["delta"]["content"]:
+        print(chunk["choices"][0]["delta"]["content"], end="")
+
+# Automated Retrieval Augmented Generation (RAG)
+r = client.chat.create(model="gpt-35-turbo-16k", messages=messages, data="myteam/documents")
+print(r)
+
+```
