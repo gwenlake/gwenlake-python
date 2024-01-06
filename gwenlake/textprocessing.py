@@ -23,16 +23,14 @@ class TextProcessing(Resource):
     def textreader(self, file: str):
         if not isinstance(file, str):
             raise ValueError("file must be a string")
-        
         resp = self._client._request("POST", "/textprocessing/textreader", files={"file": open(file, "rb")})
-
         return resp.json()
 
     def vectorizer(self, file: str, chunk_size: int = 256, chunk_overlap: int = 50, meta: dict = {}, model="e5-base-v2"):
         if not isinstance(file, str):
             raise ValueError("file must be a string")
         
-        url = f"/textprocessing/vectorizefile?chunk_size={chunk_size}&chunk_overlap={chunk_overlap}"
+        url = f"/textprocessing/vectorizer?chunk_size={chunk_size}&chunk_overlap={chunk_overlap}"
         if meta:
             url = url + "&meta=" + json.dumps(meta)
 
