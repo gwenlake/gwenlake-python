@@ -125,16 +125,16 @@ client = gwenlake.Client()
 r = client.models.list()
 print(r)
 
-r = client.models.run(
+r = client.models.create(
     input="Olympic Games will be in Paris in 2024",
     model="gwenlake/e5-base-v2",
     )
 print(r)
 ```
 
-## Upload documents
+## Upload yourdocuments
 
-Use our platform to upload documents in vector databases.
+Use our platform to upload your documents in datasets and vector databases.
 
 ```python
 import gwenlake
@@ -154,7 +154,7 @@ data = [
 
 client = gwenlake.Client()
 
-r = client.data.upload("myteam/documents", data=data)
+r = client.datasets.upload("myteam/documents", data=data)
 print(r)
 ```
 
