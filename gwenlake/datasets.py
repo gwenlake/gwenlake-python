@@ -8,15 +8,15 @@ if TYPE_CHECKING:
     from .client import Client
 
 
-__all__ = ["Data"]
+__all__ = ["Datasets"]
 
 
 
-class Data(Resource):
+class Datasets(Resource):
 
     def __init__(self, client: Client) -> None:
         super().__init__(client)
 
     def upload(self, ref: str, data: dict):
-        resp = self._client._request("POST", f"/hub/{ ref }/uploaddata", json=data)
+        resp = self._client._request("POST", f"/datasets/{ ref }/upload", json=data)
         return resp.json()

@@ -26,7 +26,7 @@ class Models(Resource):
         obj = resp.json()
         return obj["data"]
 
-    def run(self,
+    def create(self,
         input: Union[str, Any, List[Any]],
         model: str,
     ):
@@ -36,6 +36,6 @@ class Models(Resource):
             "model": model,
         }
 
-        resp = self._client._request("POST", "/embeddings", json=payload)
+        resp = self._client._request("POST", "/models", json=payload)
 
         return resp.json()
