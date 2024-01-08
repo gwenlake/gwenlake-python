@@ -7,6 +7,6 @@ setup(
     url="https://github.com/gwenlake/gwenlake-python",
     author="The Gwenlake Team",
     author_email="info@gwenlake.com",
-    install_requires=["httpx", "pydantic", "numpy", "pandas", "tiktoken"],
+    install_requires=["httpx", "pydantic", "pyyaml", "numpy", "pandas", "tiktoken"],
     packages=find_packages(exclude=('tests', "internal-test"))
 )

@@ -26,7 +26,7 @@ class Files(Resource):
         return f"{ prefix.strip('/') }"
 
 
-    def upload(self, ref: str, file: str, prefix: str = None):
+    def upload(self, ref: str, file: str, prefix: str = "/"):
         if not isinstance(file, str):
             raise ValueError("file must be a string")
         url = f"/files/{ ref.strip('/') }/" + self._build_path(file, prefix)
