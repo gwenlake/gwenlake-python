@@ -19,7 +19,6 @@ class Datasets(Resource):
 
 
     def list(self, ref: str):
-        print(f"/datasets/{ ref }")
         resp = self._client._request("GET", f"/datasets/{ ref }")
         obj = resp.json()
         return obj.get("data")
@@ -28,3 +27,9 @@ class Datasets(Resource):
     def get(self, ref: str):
         resp = self._client._request("GET", f"/datasets/{ ref }")
         return resp.json()
+
+
+    def search(self, ref: str, query: dict = {}):
+        resp = self._client._request("POST", f"/datasets/{ ref }/search", json=query)
+        obj = resp.json()
+        return obj.get("data")
