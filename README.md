@@ -58,34 +58,6 @@ print(prompt)
 
 ```
 
-## Manage your files
-
-Upload and share files on your private datasets.
-
-```python
-import gwenlake
-
-client = gwenlake.Client()
-
-# upload a file into a dataset
-r = client.files.upload("myteam/mydataset", file="test.pdf")
-print(r)
-
-# upload a file in a subdir
-r = client.files.upload("myteam/mydataset/docs", file="test.pdf")
-print(r)
-
-# list files
-r = client.files.list("myteam/mydataset")
-print(r)
-
-r = client.files.list("myteam/mydataset/docs")
-print(r)
-
-# get file
-file = client.files.get("myteam/mydataset/test.pdf")
-```
-
 ## Embeddings
 
 Use our inference platform for embeddings using [intfloat/e5-base-v2](https://huggingface.co/intfloat/e5-base-v2)
@@ -108,7 +80,7 @@ for item in response.data:
     print(pd.DataFrame(item.embedding))
 ```
 
-## Run models
+## Models
 
 Use our inference platform to run public or private models from the hub.
 
@@ -122,7 +94,7 @@ print(r)
 
 r = client.models.create(
     input="Olympic Games will be in Paris in 2024",
-    model="gwenlake/e5-base-v2",
+    model="e5-base-v2",
     )
 print(r)
 ```
@@ -154,6 +126,33 @@ for chunk in stream:
         print(chunk["choices"][0]["delta"]["content"], end="")
 ```
 
+## Files
+
+Upload files on your private datasets.
+
+```python
+import gwenlake
+
+client = gwenlake.Client()
+
+# upload a file into a dataset
+r = client.files.upload("myteam/mydataset", file="test.pdf")
+print(r)
+
+# upload a file in a subdir
+r = client.files.upload("myteam/mydataset/docs", file="test.pdf")
+print(r)
+
+# list files
+r = client.files.list("myteam/mydataset")
+print(r)
+
+r = client.files.list("myteam/mydataset/docs")
+print(r)
+
+# get file
+file = client.files.get("myteam/mydataset/test.pdf")
+```
 
 ## Chat with RAG (Automated Retrieval Augmented Generation)
 
