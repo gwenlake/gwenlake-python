@@ -42,13 +42,6 @@ class Files(Resource):
         return self._client._request("GET", url)
 
 
-    # def upload(self, ref: str, file: str, prefix: str = "/"):
-    #     if not isinstance(file, str):
-    #         raise ValueError("file must be a string")
-    #     url = f"/files/{ ref.strip('/') }/" + self._build_path(file, prefix)
-    #     resp = self._client._request("POST", url, files={"file": open(file, "rb")})
-    #     return resp.json()
-
     def upload(self, ref: str, file: str, meta: dict = {}):
         if not isinstance(file, str):
             raise ValueError("file must be a string")
