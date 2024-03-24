@@ -17,6 +17,7 @@ from .prompts import Prompts
 from .models import Models
 from .datasets import Datasets
 from .chat import Chat
+from .generation import TextGeneration
 
 import gwenlake
 
@@ -129,6 +130,9 @@ class Client:
     def chat(self) -> Chat:
         return Chat(client=self)
 
+    @property
+    def textgeneration(self) -> TextGeneration:
+        return TextGeneration(client=self)
 
 # Adapted from https://github.com/encode/httpx/issues/108#issuecomment-1132753155
 class RetryTransport(httpx.AsyncBaseTransport, httpx.BaseTransport):

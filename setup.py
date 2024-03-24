@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="gwenlake",
     description = "Python client for Gwenlake API",
-    version='0.1.8',
+    version='0.2.1',
     url="https://github.com/gwenlake/gwenlake-python",
     author="The Gwenlake Team",
     author_email="info@gwenlake.com",
