@@ -28,6 +28,7 @@ class TextGeneration(Resource):
         input: Optional[dict] = None,
         prompt: Optional[str] = None,
         retriever: Optional[dict] = None,
+        temperature = 0
     ):
         
         payload = { "model": model }
@@ -39,6 +40,8 @@ class TextGeneration(Resource):
             payload["prompt"] = prompt
         if retriever:
             payload["retriever"] = retriever
+
+        payload["temperature"]=temperature
 
         resp = self._client._request("POST", "/generation/text", json=payload)            
         return resp.json()
