@@ -40,7 +40,7 @@ class TextGeneration(Resource):
         if retriever:
             payload["retriever"] = retriever
 
-        resp = self._client._request("POST", "/generation/text", json=payload)            
+        resp = self._client._request("POST", "/text/generation", json=payload)            
         return resp.json()
 
 
