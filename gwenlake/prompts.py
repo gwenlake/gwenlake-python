@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from langchain.prompts import PromptTemplate
+# from langchain.prompts import PromptTemplate
 
 
 from .resource import Resource
@@ -30,4 +30,5 @@ class Prompts(Resource):
     def get(self, ref: str):
         resp = self._client._request("GET", f"/prompts/{ ref }")
         obj = resp.json()
-        return PromptTemplate.from_template(obj["template"])
+        return obj["template"]
+        # return PromptTemplate.from_template(obj["template"])
