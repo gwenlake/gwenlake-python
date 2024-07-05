@@ -96,11 +96,12 @@ print(prompt)
 ```
 
 
-## Text Generation Agents
+## Text Generation
 
-Discover how to combine prompts, datasets with models.
+Discover how to automatically combine prompts, datasets and models.
 
 ```python
+# Simple RAG example
 retriever = {
     "dataset": "gwenlake/csrd",
     "limit": 10
