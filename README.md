@@ -89,7 +89,7 @@ Discover and share prompts in the Gwenlake Hub.
 response = client.prompts.list()
 print(response)
 
-# get a prompt in langchain format
+# get a prompt
 prompt = client.prompts.get("gwenlake/rag")
 print(prompt)
 
