@@ -23,14 +23,6 @@ The library needs to be configured with your account's secret key. Either set it
 export GWENLAKE_API_KEY='sk-...'
 ```
 
-Or set `gwenlake.api_key` to its value:
-
-```python
-import gwenlake
-
-gwenlake.api_key = "sk-..."
-```
-
 Or set `api_key` to its value with the Client:
 
 ```python
@@ -38,24 +30,35 @@ import gwenlake
 
 client = gwenlake.client(api_key = "sk-...")
 ```
+## Chat
 
-
-## Prompts
-
-Discover and share prompts in the Gwenlake Hub.
+Use our inference platform to chat.
 
 ```python
 import gwenlake
 
 client = gwenlake.Client()
 
-response = client.prompts.list()
-print(response)
+# list models
+r = client.models.list()
+print(r)
 
-# get a prompt in langchain format
-prompt = client.prompts.get("gwenlake/rag")
-print(prompt)
+# run model (no streaming)
+messages = [
+    {
+        "role": "user",
+        "content": "Anything about France?"
+    }
+]
 
+r = client.chat.create(model="gpt-35-turbo-16k", messages=messages)
+print(r)
+
+# streaming
+stream = client.chat.stream(model="gpt-35-turbo-16k", messages=messages)
+for chunk in stream:
+    if chunk["choices"][0]["delta"]["content"]:
+        print(chunk["choices"][0]["delta"]["content"], end="")
 ```
 
 ## Embeddings
@@ -80,50 +83,22 @@ for item in response.data:
     print(pd.DataFrame(item.embedding))
 ```
 
-## Models
+## Prompts
 
-Use our inference platform to run public or private models from the hub.
-
-```python
-import gwenlake
-
-client = gwenlake.Client()
-
-r = client.models.list()
-print(r)
-
-r = client.models.create(
-    input="Olympic Games will be in Paris in 2024",
-    model="e5-base-v2",
-    )
-print(r)
-```
-
-## Chat
-
-Use our inference platform to chat.
+Discover and share prompts in the Gwenlake Hub.
 
 ```python
 import gwenlake
 
 client = gwenlake.Client()
 
-messages = [
-    {
-        "role": "user",
-        "content": "Anything about France?"
-    }
-]
+response = client.prompts.list()
+print(response)
 
-# No streaming
-r = client.chat.create(model="gpt-35-turbo-16k", messages=messages)
-print(r)
+# get a prompt in langchain format
+prompt = client.prompts.get("gwenlake/rag")
+print(prompt)
 
-# Streaming
-stream = client.chat.stream(model="gpt-35-turbo-16k", messages=messages)
-for chunk in stream:
-    if chunk["choices"][0]["delta"]["content"]:
-        print(chunk["choices"][0]["delta"]["content"], end="")
 ```
 
 ## Files
@@ -152,25 +127,4 @@ print(r)
 
 # get file
 file = client.files.get("myteam/mydataset/test.pdf")
-```
-
-## Chat with RAG (Automated Retrieval Augmented Generation)
-
-Use our inference platform to chat on your documents.
-
-```python
-import gwenlake
-
-client = gwenlake.Client()
-
-messages = [
-    {
-        "role": "user",
-        "content": "Anything about France?"
-    }
-]
-
-r = client.chat.create(model="gpt-35-turbo-16k", messages=messages, data="myteam/documents")
-print(r)
-
 ```
