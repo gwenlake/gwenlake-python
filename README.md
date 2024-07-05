@@ -85,11 +85,14 @@ for item in response.data:
 
 Discover and share prompts in the Gwenlake Hub.
 
+List prompts
 ```python
 response = client.prompts.list()
 print(response)
+```
 
-# get a prompt
+Get a prompt
+```python
 prompt = client.prompts.get("gwenlake/rag")
 print(prompt)
 
