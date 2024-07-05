@@ -54,6 +54,9 @@ print(r)
 ```
 
 ### Chat with streaming
+
+The SDK also includes helpers to process streams and handle incoming events.
+
 ```python
 stream = client.chat.stream(model="llama-3-8b", messages=messages)
 for chunk in stream:
