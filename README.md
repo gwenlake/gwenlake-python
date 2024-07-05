@@ -49,13 +49,13 @@ messages = [
     }
 ]
 
-r = client.chat.create(model="gpt-35-turbo-16k", messages=messages)
+r = client.chat.create(model="llama-3-8b", messages=messages)
 print(r)
 ```
 
 ### Chat with streaming
 ```python
-stream = client.chat.stream(model="gpt-35-turbo-16k", messages=messages)
+stream = client.chat.stream(model="llama-3-8b", messages=messages)
 for chunk in stream:
     if chunk["choices"][0]["delta"]["content"]:
         print(chunk["choices"][0]["delta"]["content"], end="")
