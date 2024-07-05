@@ -103,7 +103,7 @@ print(prompt)
 
 Discover how to automatically combine prompts, datasets and models.
 
-Below an illustration to produce a Retrieval Augmented Generation (RAG) agent.
+### Retrieval Augmented Generation (RAG)
 
 ```python
 retriever = {
