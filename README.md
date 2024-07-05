@@ -32,7 +32,7 @@ client = gwenlake.client(api_key = "sk-...")
 ```
 ## Models
 
-Use our inference platform to chat.
+Use our inference platform to chat with models.
 
 ### List models
 ```python
@@ -86,10 +86,6 @@ for item in response.data:
 Discover and share prompts in the Gwenlake Hub.
 
 ```python
-import gwenlake
-
-client = gwenlake.Client()
-
 response = client.prompts.list()
 print(response)
 
