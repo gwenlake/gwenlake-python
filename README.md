@@ -30,20 +30,18 @@ import gwenlake
 
 client = gwenlake.client(api_key = "sk-...")
 ```
-## Chat
+## Models
 
 Use our inference platform to chat.
 
+### List models
 ```python
-import gwenlake
-
-client = gwenlake.Client()
-
-# list models
 r = client.models.list()
 print(r)
+```
 
-# run model (no streaming)
+### Chat
+```python
 messages = [
     {
         "role": "user",
@@ -53,8 +51,10 @@ messages = [
 
 r = client.chat.create(model="gpt-35-turbo-16k", messages=messages)
 print(r)
+```
 
-# streaming
+### Chat with streaming
+```python
 stream = client.chat.stream(model="gpt-35-turbo-16k", messages=messages)
 for chunk in stream:
     if chunk["choices"][0]["delta"]["content"]:
@@ -67,20 +67,15 @@ Use our inference platform for embeddings using [intfloat/e5-base-v2](https://hu
 or the multilingual [intfloat/multilingual-e5-base](https://huggingface.co/intfloat/multilingual-e5-base) model (supports 100 languages).
 
 ```python
-import pandas as pd
-import gwenlake
-
 list_of_texts = [
     "Olympic Games will be in Paris in 2024",
     "Do Not Watch This Movie! Not funny at all",
     "Can you help me write an email to my best friend?",
 ]
 
-client = gwenlake.Client()
-
 response = client.embeddings.create(input=list_of_texts, model="e5-base-v2")
 for item in response.data:
-    print(pd.DataFrame(item.embedding))
+    print(item.embedding)
 ```
 
 ## Prompts
