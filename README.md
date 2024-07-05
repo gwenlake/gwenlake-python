@@ -98,10 +98,10 @@ print(prompt)
 
 ## Text Generation
 
-Discover how to automatically combine prompts, datasets and models.
+Discover how to automatically combine prompts, datasets and models. Below an
+illustration to produce a Retrieval Augmented Generation (RAG) agent.
 
 ```python
-# Simple RAG example
 retriever = {
     "dataset": "gwenlake/csrd",
     "limit": 10
