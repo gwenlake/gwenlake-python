@@ -13,6 +13,7 @@ from .constants import DEFAULT_TIMEOUT
 
 from .embeddings import Embeddings
 from .files import Files
+from .reader import Reader
 from .prompts import Prompts
 from .models import Models
 from .datasets import Datasets
@@ -113,6 +114,10 @@ class Client:
     @property
     def files(self) -> Files:
         return Files(client=self)
+
+    @property
+    def reader(self) -> Reader:
+        return Reader(client=self)
 
     @property
     def prompts(self) -> Prompts:
