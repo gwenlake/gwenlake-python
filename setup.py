@@ -9,5 +9,5 @@ setup(
     author_email="info@gwenlake.com",
     install_requires=["httpx", "pydantic", "pyyaml", "numpy", "pandas", "tiktoken"],
     packages=find_packages(exclude=('tests', "internal-test")),
-    python_requires=">=3.10",  # Specify the minimum Python version required
+    python_requires=">=3.11",  # Specify the minimum Python version required
 )

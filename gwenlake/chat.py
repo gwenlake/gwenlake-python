@@ -24,27 +24,15 @@ class Chat(Resource):
         self,
         *,
         messages: List = [],
-        model: Union[str, Literal["gpt-35-turbo-16k"]],
-        inputs: Optional[dict] = None,
-        dataset: Optional[str] = None,
-        prompt: Optional[str] = None,
-        top_k: Optional[int] = 20,
-        threshold: Optional[float] = 1.0,
+        model: str,
+        temperature: float = 0.0,
     ):
         
         payload = { "model": model }
         if messages:
             payload["messages"] = messages
-        if inputs:
-            payload["inputs"] = inputs
-        if dataset:
-            payload["dataset"] = dataset
-        if prompt:
-            payload["prompt"] = prompt
-        if top_k:
-            payload["top_k"] = top_k
-        if threshold:
-            payload["threshold"] = threshold
+        if temperature:
+            payload["temperature"] = temperature
 
         resp = self._client._request("POST", "/chat/completions", json=payload)            
         return resp.json()
