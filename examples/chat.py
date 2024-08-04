@@ -24,5 +24,3 @@ print(response)
 stream = client.chat.create(model="llama-3.1-8b", messages=messages, stream=True)
 for chunk in stream:
     print(chunk)
-    # if chunk["choices"][0]["delta"]["content"]:
-    #     print(chunk["choices"][0]["delta"]["content"], end="")
