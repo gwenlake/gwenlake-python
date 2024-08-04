@@ -1,5 +1,3 @@
-"""Gwenlake API Client."""
-import os
 from importlib import metadata
 
 try:
@@ -19,3 +17,15 @@ __all__ = [
 api_key: str | None = None
 
 base_url: str | None = None
+
+
+default_client = Client()
+
+chat = default_client.chat
+embeddings = default_client.embeddings
+files = default_client.files
+datasets = default_client.datasets
+textgeneration = default_client.textgeneration
+models = default_client.models
+prompts = default_client.prompts
+reader = default_client.reader

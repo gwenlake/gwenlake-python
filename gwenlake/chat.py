@@ -34,14 +34,14 @@ class Chat(Resource):
         if temperature:
             payload["temperature"] = temperature
 
-        resp = self._client._request("POST", "/chat/completions", json=payload)            
-        return resp.json()
+        response = self._client._request("POST", "/chat/completions", json=payload)            
+        return response.json()
 
 
     def stream(
         self,
         messages: List,
-        model: Union[str, Literal["gpt-35-turbo-16k"]],
+        model: str,
         data: Optional[str] = None, 
     ):
         
@@ -53,7 +53,7 @@ class Chat(Resource):
         if data:
             payload["data"] = data
 
-        resp = self._client._stream("POST", "/chat/completions", json=payload)
-        for streamed_response in resp:
-            yield json.loads(streamed_response)
+        response = self._client._stream("POST", "/chat/completions", json=payload)
+        for chunk in response:
+            yield json.loads(chunk)
  

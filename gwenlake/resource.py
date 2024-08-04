@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .client import Client
 
-
 class Resource:
 
     _client: Client

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 # import base64
 from typing import TYPE_CHECKING, List, Dict, Any, Union
 from typing_extensions import Literal
 
-from .schema import EmbeddingResponse, Embedding, Usage
 from .resource import Resource
 
 if TYPE_CHECKING:
@@ -26,16 +26,27 @@ class Models(Resource):
         obj = resp.json()
         return obj["data"]
 
-    def create(self,
-        input: Union[str, Any, List[Any]],
+    def create(self, *,
         model: str,
+        input: Union[str, Any, List[Any]],
+        stream: bool = False,
     ):
     
         payload = {
             "input": input,
             "model": model,
         }
+        if stream:
+            payload["stream"] = True
+            return self._client._stream("POST", "/models", json=payload)
 
-        resp = self._client._request("POST", "/models", json=payload)
+        response = self._client._request("POST", "/models", json=payload)
+        return response.json()
 
-        return resp.json()
+    def run(self, *,
+        model: str,
+        input: Union[str, Any, List[Any]],
+        stream: bool = False,
+    ):
+        return self.create(model=model, input=input, stream=stream)
+
