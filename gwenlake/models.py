@@ -35,9 +35,9 @@ class Models(Resource):
         payload = {
             "input": input,
             "model": model,
+            "stream": stream
         }
         if stream:
-            payload["stream"] = True
             return self._client._stream("POST", "/models", json=payload)
 
         response = self._client._request("POST", "/models", json=payload)

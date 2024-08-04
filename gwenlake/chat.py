@@ -23,37 +23,16 @@ class Chat(Resource):
     def create(
         self,
         *,
-        messages: List = [],
         model: str,
+        messages: List,
         temperature: float = 0.0,
+        stream: bool = False,
     ):
         
-        payload = { "model": model }
-        if messages:
-            payload["messages"] = messages
-        if temperature:
-            payload["temperature"] = temperature
+        payload = { "model": model, "messages": messages, "temperature": temperature, "stream": stream }
+
+        if stream:
+            return self._client._stream("POST", "/chat/completions", json=payload)
 
         response = self._client._request("POST", "/chat/completions", json=payload)            
         return response.json()
-
-
-    def stream(
-        self,
-        messages: List,
-        model: str,
-        data: Optional[str] = None, 
-    ):
-        
-        payload = {
-            "messages": messages,
-            "model": model,
-            "stream": True,
-        }
-        if data:
-            payload["data"] = data
-
-        response = self._client._stream("POST", "/chat/completions", json=payload)
-        for chunk in response:
-            yield json.loads(chunk)
- 
