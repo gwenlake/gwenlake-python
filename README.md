@@ -28,7 +28,7 @@ Or set `api_key` to its value with the Client:
 ```python
 import gwenlake
 
-client = gwenlake.client(api_key = "sk-...")
+client = gwenlake.Client(api_key = "sk-...")
 ```
 ## Models
 
@@ -49,7 +49,7 @@ messages = [
     }
 ]
 
-r = client.chat.create(model="llama-3-8b", messages=messages)
+r = client.chat.create(model="meta/llama-3.1-8b", messages=messages)
 print(r)
 ```
 
@@ -58,7 +58,7 @@ print(r)
 The SDK also includes helpers to process streams and handle incoming events.
 
 ```python
-stream = client.chat.stream(model="llama-3-8b", messages=messages)
+stream = client.chat.stream(model="meta/llama-3.1-8b", messages=messages)
 for chunk in stream:
     if chunk["choices"][0]["delta"]["content"]:
         print(chunk["choices"][0]["delta"]["content"], end="")
@@ -112,7 +112,7 @@ retriever = {
 }
 
 response = client.textgeneration.create(
-    model="llama-3-8b",
+    model="meta/llama-3.1-8b",
     prompt="gwenlake/rag",
     input={"query": "Explain CSRD"},
     retriever=retriever)
