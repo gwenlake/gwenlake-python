@@ -45,10 +45,10 @@ class Client:
             api_key = gwenlake.api_key
         if api_key is None:
             api_key = os.environ.get("GWENLAKE_API_KEY")
-        if api_key is None:
-            raise GwenlakeError(
-                "The api_key client option must be set either by passing api_key to the client or by setting the GWENLAKE_API_KEY environment variable"
-            )
+        # if api_key is None:
+        #     raise GwenlakeError(
+        #         "The api_key client option must be set either by passing api_key to the client or by setting the GWENLAKE_API_KEY environment variable"
+        #     )
         self._api_key = api_key
 
         if base_url is None:
