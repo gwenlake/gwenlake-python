@@ -27,9 +27,18 @@ class Chat(Resource):
         messages: List,
         temperature: float = 0.0,
         stream: bool = False,
+        response_format: Optional[dict] = None,
     ):
         
-        payload = { "model": model, "messages": messages, "temperature": temperature, "stream": stream }
+        payload = { 
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": stream
+            }
+        
+        if response_format:
+            payload["response_format"] = response_format
 
         if stream:
             return self._client._stream("POST", "/chat/completions", json=payload)
