@@ -5,10 +5,9 @@ import json
 from typing import TYPE_CHECKING, List, Dict, Any, Union
 from typing_extensions import Literal
 
-from .resource import Resource
-
+from gwenlake.client.resource import Resource
 if TYPE_CHECKING:
-    from .client import Client
+    from gwenlake.client.main import Client
 
 
 __all__ = ["Models"]

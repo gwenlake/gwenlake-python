@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .resource import Resource
-
+from gwenlake.client.resource import Resource
 if TYPE_CHECKING:
-    from .client import Client
+    from gwenlake.client.main import Client
 
 
 __all__ = ["Datasets"]

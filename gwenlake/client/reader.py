@@ -3,13 +3,11 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from .exceptions import GwenlakeError
-from .resource import Resource
-from .schema import FileMeta
-
-
+from gwenlake.base.exceptions import GwenlakeError
+from gwenlake.base.types import FileMeta
+from gwenlake.client.resource import Resource
 if TYPE_CHECKING:
-    from .client import Client
+    from gwenlake.client.main import Client
 
 
 __all__ = ["Reader"]

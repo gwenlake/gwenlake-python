@@ -6,18 +6,18 @@ from uuid import uuid4
 from datetime import datetime
 
 
-class Message(BaseModel):
+class ChatMessage(BaseModel):
     role: str
     content: Optional[str] = None
 
 class Choice(BaseModel):
     index: Optional[int] = 0 
-    message: Message
+    message: ChatMessage
     finish_reason: Optional[str] = "stop"
 
 class ChoiceDelta(BaseModel):
     index: Optional[int] = 0 
-    delta: Message
+    delta: ChatMessage
     finish_reason: Optional[str] = None
 
 class Usage(BaseModel):

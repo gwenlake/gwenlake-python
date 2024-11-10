@@ -1,26 +1,23 @@
 import os
 import random
 import time
-from datetime import datetime
 import httpx
 import logging
-import pandas as pd
-from typing import Any, Optional, List, Dict, Any, Mapping, Type, Union, Iterable, Iterator
+from datetime import datetime
+from typing import Any, Optional, List, Dict, Any, Mapping, Type, Union, Iterable, Iterator, AsyncIterator
 
-from . import __version__
-from .exceptions import GwenlakeError
-from .constants import DEFAULT_TIMEOUT
+from gwenlake import __version__
+from gwenlake.base.exceptions import GwenlakeError
+from gwenlake.client.constants import DEFAULT_TIMEOUT
+from gwenlake.client.embeddings import Embeddings
+from gwenlake.client.files import Files
+from gwenlake.client.reader import Reader
+from gwenlake.client.prompts import Prompts
+from gwenlake.client.models import Models
+from gwenlake.client.datasets import Datasets
+from gwenlake.client.chat import Chat
+from gwenlake.client.generation import TextGeneration
 
-from .embeddings import Embeddings
-from .files import Files
-from .reader import Reader
-from .prompts import Prompts
-from .models import Models
-from .datasets import Datasets
-from .chat import Chat
-from .generation import TextGeneration
-
-import gwenlake
 
 
 logger = logging.getLogger(__name__)
@@ -41,8 +38,8 @@ class Client:
 
         super().__init__()
 
-        if api_key is None:
-            api_key = gwenlake.api_key
+        # if api_key is None:
+        #     api_key = gwenlake.api_key
         if api_key is None:
             api_key = os.environ.get("GWENLAKE_API_KEY")
         # if api_key is None:
@@ -51,8 +48,8 @@ class Client:
         #     )
         self._api_key = api_key
 
-        if base_url is None:
-            base_url = gwenlake.base_url
+        # if base_url is None:
+        #     base_url = gwenlake.base_url
         if base_url is None:
             base_url = os.environ.get("GWENLAKE_BASE_URL")
         if base_url is None:
@@ -102,7 +99,7 @@ class Client:
             for streamed_response in resp.iter_lines():
                 yield streamed_response
 
-    async def _async_stream(self, method: str, path: str, **kwargs) -> Iterator[Dict[str, Any]]:
+    async def _async_stream(self, method: str, path: str, **kwargs) -> AsyncIterator[Dict[str, Any]]:
         async with self._client.stream(method, path, **kwargs) as resp:
             async for streamed_response in resp.iter_lines():
                 yield streamed_response

@@ -4,11 +4,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List, Union
 from typing_extensions import Literal
 
-from .schema import EmbeddingResponse, Embedding, Usage
-from .resource import Resource
-
+from gwenlake.base.types import EmbeddingResponse, Embedding, Usage
+from gwenlake.client.resource import Resource
 if TYPE_CHECKING:
-    from .client import Client
+    from gwenlake.client.main import Client
 
 
 __all__ = ["Embeddings"]
