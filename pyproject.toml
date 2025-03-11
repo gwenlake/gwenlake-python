@@ -1,6 +1,10 @@
-[build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+[project]
+name = "gwenlake"
+version = "0.4.1"
+description = "Gwenlake framework"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE.txt" }
 
 [tool.black]
 target-version = ['py36']
