@@ -18,7 +18,3 @@ class GwenlakeException(Exception):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(message={str(self)})"
     
-
-class GwenlakeError(GwenlakeException):
-    """An error from Gwenlake."""
-

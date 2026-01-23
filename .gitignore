@@ -160,6 +160,4 @@ cython_debug/
 #.idea/
 
 .DS_Store
-internal-tests/
-tests/
-
+internal/

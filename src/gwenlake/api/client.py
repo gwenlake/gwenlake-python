@@ -7,16 +7,11 @@ from datetime import datetime
 from typing import Any, Optional, List, Dict, Any, Mapping, Type, Union, Iterable, Iterator, AsyncIterator
 
 from gwenlake import __version__
-from gwenlake.base.exceptions import GwenlakeError
-from gwenlake.client.constants import DEFAULT_TIMEOUT
-from gwenlake.client.embeddings import Embeddings
-from gwenlake.client.files import Files
-from gwenlake.client.reader import Reader
-from gwenlake.client.prompts import Prompts
-from gwenlake.client.models import Models
-from gwenlake.client.datasets import Datasets
-from gwenlake.client.chat import Chat
-from gwenlake.client.generation import TextGeneration
+from gwenlake.core.exceptions import GwenlakeException
+from gwenlake.api.constants import DEFAULT_TIMEOUT
+from gwenlake.api.models import Models
+from gwenlake.api.embeddings import Embeddings
+from gwenlake.api.chat import Chat
 
 
 
@@ -109,32 +104,12 @@ class Client:
         return Embeddings(client=self)
     
     @property
-    def files(self) -> Files:
-        return Files(client=self)
-
-    @property
-    def reader(self) -> Reader:
-        return Reader(client=self)
-
-    @property
-    def prompts(self) -> Prompts:
-        return Prompts(client=self)
-
-    @property
     def models(self) -> Models:
         return Models(client=self)
 
     @property
-    def datasets(self) -> Datasets:
-        return Datasets(client=self)
-
-    @property
     def chat(self) -> Chat:
         return Chat(client=self)
-
-    @property
-    def textgeneration(self) -> TextGeneration:
-        return TextGeneration(client=self)
 
 # Adapted from https://github.com/encode/httpx/issues/108#issuecomment-1132753155
 class RetryTransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
@@ -294,4 +269,4 @@ def _build_httpx_client(
 
 def _raise_for_status(resp: httpx.Response) -> None:
     if 400 <= resp.status_code < 600:
-        raise GwenlakeError(resp.json()["detail"])
+        raise GwenlakeException(resp.json()["detail"])
