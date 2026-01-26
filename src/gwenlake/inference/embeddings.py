@@ -40,7 +40,6 @@ class Embeddings:
                 "model": model,
             }
             json_payload = json.dumps(payload)
-            print(json_payload)
 
             response = self._client.call_api(
                 RequestInfo(
