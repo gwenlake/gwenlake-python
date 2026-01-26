@@ -5,19 +5,17 @@ import json
 from typing import TYPE_CHECKING, List, Union, Iterable, Any, Optional
 from typing_extensions import Literal
 
-from gwenlake.client.resource import Resource
-if TYPE_CHECKING:
-    from gwenlake.client.main import Client
+from gwenlake.core.api_client import ApiClient, AsyncApiClient, RequestInfo
 
 
 __all__ = ["Chat"]
 
 
 
-class Chat(Resource):
+class Chat:
 
-    def __init__(self, client: Client) -> None:
-        super().__init__(client)
+    def __init__(self, client: ApiClient):
+        self._client = client
 
     def create(
         self,

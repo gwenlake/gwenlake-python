@@ -9,16 +9,17 @@ from typing import Optional, Dict, Any, List
 logger = logging.getLogger(__name__)
 
 
-_DIRNAME = ".gwenlake-factory"
+_DIRNAME = ".gwenlake"
 _FILENAME = "credentials"
 
 
 class Profile(BaseModel):
-    organization: str
-    hostname: str
-    client_id: str
-    client_secret: str
+    token: Optional[str] = None
+    token_uri: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
     scopes: Optional[List] = None
+    tenant: Optional[str] = None
 
 
 def _get_default_user_profile_path() -> str:
@@ -35,10 +36,10 @@ def _get_default_user_profile_path() -> str:
 
 def _load_user_profile_from_dict(content: Dict[str, Any]):
     _profile = Profile(
-        organization=content.get("organization"),
-        hostname=content.get("organization") + ".gwenlakefactory.com",
+        token=content.get("token"),
         client_id=content.get("client_id"),
         client_secret=content.get("client_secret"),
+        tenant=content.get("tenant"),
     )
 
     if content.get("scopes"):
@@ -93,11 +94,12 @@ def save_user_profile(name: str, profile: Profile):
     if name != "default" and not config.has_section(name):
         config.add_section(name)
 
-    config[name]["organization"] = profile.organization
+    config[name]["token"] = profile.token
     config[name]["client_id"] = profile.client_id
     config[name]["client_secret"] = profile.client_secret
     if profile.scopes is not None:
         config[name]["scopes"] = ",".join(profile.scopes)
+    config[name]["tenant"] = profile.tenant
 
     try:
         with open(config_path, "w") as f:

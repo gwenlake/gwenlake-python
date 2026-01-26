@@ -5,13 +5,18 @@ from pydantic import BaseModel
 
 class OAuthTokenResponse(BaseModel):
     access_token: str
-    token_type: str
-    expires_in: int
+    token_type: Optional[str] = "Bearer"
+    expires_in: Optional[int] = None
     refresh_token: Optional[str] = None
 
     def __init__(self, token_response: Dict[str, Any]) -> None:
         super().__init__(**token_response)
 
+    @classmethod
+    def from_token(cls, token: str):
+        return cls(
+            token_response=dict(access_token=token),
+        )
 
 class OAuthToken:
     def __init__(self, token: OAuthTokenResponse):
@@ -43,4 +48,3 @@ class OAuthToken:
     @staticmethod
     def current_time() -> int:
         return int(time.time() * 1000)
-

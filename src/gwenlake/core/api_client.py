@@ -1,11 +1,12 @@
 import json
+import httpx
 from datetime import datetime, timezone
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Iterator, AsyncIterator, Callable
 from urllib.parse import quote
 
-from gwenlake.core.httpclient import HttpClient, AsyncHttpClient
 from gwenlake.core.credentials import Credentials
+from gwenlake.version import __version__
 
 
 class RequestInfo(BaseModel):
@@ -14,23 +15,27 @@ class RequestInfo(BaseModel):
     path_params: Optional[Dict[str, Any]] = {}
     params: Optional[Dict[str, Any]] = {}
     headers: Optional[Dict[str, Any]] = {}
-    body: Optional[Any] = None
+    content: Optional[Any] = None
+    data: Optional[Any] = None
     files: Optional[Dict[str, Any]] = None
     timeout: Optional[int] = None
     stream: Optional[bool] = False
 
 
-
 class BaseApiClient:
 
     def __init__(
-        self, 
+        self,
+        *,
+        base_url: str,
         credentials: Credentials,
-        prefix: str = None
+        max_retries: int = None,
+        timeout: int = None,
     ):
+        self._base_url = base_url
         self._credentials = credentials
-        self._session = HttpClient(self._credentials.hostname)
-        self._prefix = prefix
+        self._max_retries = max_retries or 5
+        self._timeout = timeout or 5
 
     def _create_url(self, request_info: RequestInfo) -> str:
         resource_path = request_info.path
@@ -39,13 +44,11 @@ class BaseApiClient:
         for k, v in path_params.items():
             resource_path = resource_path.replace(f"{{{k}}}", quote(v, safe=""))
 
-        if self.prefix:
-            resource_path = f"{self._prefix}{resource_path}"
-
         return resource_path
 
     def _create_headers(self, request_info: RequestInfo) -> Dict[str, Any]:
         return {
+            "User-Agent": f"gwenlake/{__version__}",
             "Authorization": "Bearer " + self._credentials.get_token().access_token,
             **{
                 key: (
@@ -61,54 +64,114 @@ class BaseApiClient:
 
 class ApiClient(BaseApiClient):
 
-    def __init__(self, credentials: Credentials, prefix: str = None):
-        super().__init__(credentials, prefix)
-        self._session = HttpClient(self._credentials.hostname)
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        credentials: Credentials,
+        max_retries: int = None,
+        timeout: int = None,
+    ):
+        super().__init__(
+            base_url=base_url,
+            credentials=credentials,
+            max_retries=max_retries,
+            timeout=timeout
+        )
+        transport = httpx.HTTPTransport(retries=self._max_retries) 
+        self._client = httpx.Client(
+            base_url=base_url,
+            transport=transport, 
+            timeout=self._timeout,
+            follow_redirects=True,
+        )
 
     def call_api(self, request_info: RequestInfo) -> Any:
-        request = self._session.build_request(
+        request = self._client.build_request(
             method=request_info.method,
             url=self._create_url(request_info),
             headers=self._create_headers(request_info),
             params=request_info.params,
-            content=request_info.body,
+            content=request_info.content,
+            data=request_info.data,
             files=request_info.files,
             timeout=request_info.timeout,
         )
 
-        if not request_info.stream:
-            return self._session.send(
-                request=request,
-                stream=False,
-            )
+        return self._client.send(
+            request=request,
+            stream=False,
+        )
 
-        with self._session.send(request=request, stream=True) as response:
-            for line in response.iter_lines():
-                yield line
+    def stream_api(self, request_info: RequestInfo) -> Iterator[Dict[str, Any]]:
+        request = self._client.build_request(
+            method=request_info.method,
+            url=self._create_url(request_info),
+            headers=self._create_headers(request_info),
+            params=request_info.params,
+            content=request_info.content,
+            data=request_info.data,
+            files=request_info.files,
+            timeout=request_info.timeout,
+        )
+
+        with self._client.send(request=request, stream=True) as response:
+            for streamed_response in response.iter_lines():
+                yield streamed_response
 
 class AsyncApiClient(BaseApiClient):
 
-    def __init__(self, credentials: Credentials, prefix: str = None):
-        super().__init__(credentials, prefix)
-        self._session = AsyncHttpClient(self._credentials.hostname)
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        credentials: Credentials,
+        max_retries: int = None,
+        timeout: int = None,
+    ):
+        super().__init__(
+            base_url=base_url,
+            credentials=credentials,
+            max_retries=max_retries,
+            timeout=timeout
+        )
+        transport = httpx.HTTPTransport(retries=self._max_retries) 
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            transport=transport, 
+            timeout=self._timeout,
+            follow_redirects=True,
+        )
 
     async def call_api(self, request_info: RequestInfo) -> Any:
-        request = self._session.build_request(
+        request = self._client.build_request(
             method=request_info.method,
             url=self._create_url(request_info),
             headers=self._create_headers(request_info),
             params=request_info.params,
-            content=request_info.body,
+            content=request_info.content,
+            data=request_info.data,
             files=request_info.files,
             timeout=request_info.timeout,
         )
 
-        if not request_info.stream:
-            return await self._session.send(
-                request=request,
-                stream=False,
-            )
+        return await self._client.send(
+            request=request,
+            stream=False,
+        )
 
-        async with self._session.send(request=request, stream=True) as response:
-            async for line in response.iter_lines():
-                yield line
+    async def stream_api(self, request_info: RequestInfo) -> AsyncIterator[Dict[str, Any]]:
+        request = self._client.build_request(
+            method=request_info.method,
+            url=self._create_url(request_info),
+            headers=self._create_headers(request_info),
+            params=request_info.params,
+            content=request_info.content,
+            data=request_info.data,
+            files=request_info.files,
+            timeout=request_info.timeout,
+        )
+
+        async with self._client.send(request=request, stream=True) as response:
+            async for streamed_response in response.iter_lines():
+                yield streamed_response

@@ -1,8 +1,8 @@
 import os
 from typing import Any, Dict
 
-from gwenlake.factory.core.credentials import Credentials
-from gwenlake.factory.core.api_client import ApiClient, RequestInfo
+from gwenlake.core.credentials import Credentials
+from gwenlake.core.api_client import ApiClient, RequestInfo
 
 
 class FilesClient:

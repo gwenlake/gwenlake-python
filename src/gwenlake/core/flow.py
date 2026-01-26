@@ -1,7 +1,8 @@
+import httpx
 from typing import List, Optional
 
-from gwenlake_factory.core.httpclient import HttpClient
-from gwenlake_factory.core.token import OAuthToken, OAuthTokenResponse
+# from gwenlake.core.httpclient import HttpClient
+from gwenlake.core.token import OAuthToken, OAuthTokenResponse
 
 
 class OAuthUtils:
@@ -44,7 +45,7 @@ class ClientOAuthFlowProvider:
     def client_secret(self) -> str:
         return self._client_secret
 
-    def get_token(self, client: HttpClient) -> OAuthToken:
+    def get_token(self, client: httpx.Client) -> OAuthToken:
         params = {
             "client_id": self._client_id,
             "client_secret": self._client_secret,
@@ -59,7 +60,7 @@ class ClientOAuthFlowProvider:
         response.raise_for_status()
         return OAuthToken(token=OAuthTokenResponse(token_response=response.json()))
 
-    def revoke_token(self, client: HttpClient, access_token: str) -> None:
+    def revoke_token(self, client: httpx.Client, access_token: str) -> None:
         body = {
             "client_id": self._client_id,
             "client_secret": self._client_secret,
