@@ -1,9 +1,5 @@
-from __future__ import annotations
-
 import json
-# import base64
-from typing import TYPE_CHECKING, List, Dict, Any, Union
-from typing_extensions import Literal
+from typing import TYPE_CHECKING, List, Dict, Any, Union, Iterator
 
 from gwenlake.core.api_client import ApiClient, AsyncApiClient, RequestInfo
 
@@ -18,10 +14,11 @@ class Models:
         self._client = client
 
 
-    def list(self):
+    def list(self) -> List[Dict[str, Any]]:
         response = self._client.send(
             RequestInfo(method="GET", path=f"/models")
         )
+        response.raise_for_status()
         obj = response.json()
         return obj["data"]
 
@@ -29,38 +26,27 @@ class Models:
         model: str,
         input: Union[str, Any, List[Any]],
         stream: bool = False,
-    ):
+    ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
     
         payload = {
             "input": input,
             "model": model,
             "stream": stream
         }
-
-        json_payload = json.dumps(payload)
         
-        if stream:
-            return self._client.stream(
-                RequestInfo(
-                    method="POST",
-                    path="/models",
-                    headers={'Content-Type': 'application/json'},
-                    data=json_payload,
-                    stream=True,
-                )
-            )
-
-        response = self._client.send(
-            RequestInfo(
-                method="POST",
-                path="/models",
-                headers={'Content-Type': 'application/json'},
-                data=json_payload,
-                stream=True,
-            )
+        request_info = RequestInfo(
+            method="POST",
+            path="/models",
+            headers={'Content-Type': 'application/json'},
+            data=json.dumps(payload),
         )
-        return response.json()
 
+        if stream:
+            return self._client.stream(request_info)
+
+        response = self._client.send(request_info)
+        response.raise_for_status()
+        return response.json()
 
 class AsyncModels:
 
@@ -68,10 +54,11 @@ class AsyncModels:
         self._client = client
 
 
-    async def list(self):
+    async def list(self) -> List[Dict[str, Any]]:
         response = await self._client.send(
             RequestInfo(method="GET", path=f"/models")
         )
+        response.raise_for_status()
         obj = response.json()
         return obj["data"]
 
@@ -89,26 +76,16 @@ class AsyncModels:
             "stream": stream
         }
 
-        json_payload = json.dumps(payload)
-        
-        if stream:
-            return await self._client.stream(
-                RequestInfo(
-                    method="POST",
-                    path="/models",
-                    headers={'Content-Type': 'application/json'},
-                    data=json_payload,
-                    stream=True,
-                )
-            )
-
-        response = await self._client.send(
-            RequestInfo(
-                method="POST",
-                path="/models",
-                headers={'Content-Type': 'application/json'},
-                data=json_payload,
-                stream=True,
-            )
+        request_info = RequestInfo(
+            method="POST",
+            path="/models",
+            headers={'Content-Type': 'application/json'},
+            data=json.dumps(payload),
         )
+
+        if stream:
+            return self._client.stream(request_info)
+
+        response = await self._client.send(request_info)
+        response.raise_for_status()
         return response.json()

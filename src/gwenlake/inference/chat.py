@@ -1,15 +1,7 @@
-from __future__ import annotations
-
-# import base64
 import json
-from typing import TYPE_CHECKING, List, Union, Iterable, Any, Optional
-from typing_extensions import Literal
+from typing import Optional, List, Dict, Any, Union, AsyncIterator
 
 from gwenlake.core.api_client import ApiClient, AsyncApiClient, RequestInfo
-
-
-__all__ = ["Chat"]
-
 
 
 class Chat:
@@ -25,7 +17,7 @@ class Chat:
         temperature: float = 0.0,
         stream: bool = False,
         response_format: Optional[dict] = None,
-    ):
+    ) -> Union[Dict[str, Any], AsyncIterator[Dict[str, Any]]]:
         
         payload = { 
             "model": model,
@@ -37,10 +29,18 @@ class Chat:
         if response_format:
             payload["response_format"] = response_format
 
-        if stream:
-            return self._client.stream("POST", "/chat/completions", json=payload)
+        request_info = RequestInfo(
+            method="POST",
+            path="/chat/completions",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+        )
 
-        response = self._client.send("POST", "/chat/completions", json=payload)            
+        if stream:
+            return self._client.stream(request_info)
+
+        response = self._client.send(request_info)
+        response.raise_for_status()
         return response.json()
 
 
@@ -57,7 +57,7 @@ class AsyncChat:
         temperature: float = 0.0,
         stream: bool = False,
         response_format: Optional[dict] = None,
-    ):
+    ) -> Union[Dict[str, Any], AsyncIterator[Dict[str, Any]]]:
         
         payload = { 
             "model": model,
@@ -69,8 +69,16 @@ class AsyncChat:
         if response_format:
             payload["response_format"] = response_format
 
-        if stream:
-            return self._client.stream("POST", "/chat/completions", json=payload)
+        request_info = RequestInfo(
+            method="POST",
+            path="/chat/completions",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+        )
 
-        response = self._client.send("POST", "/chat/completions", json=payload)            
+        if stream:
+            return self._client.stream(request_info)
+
+        response = await self._client.send(request_info)
+        response.raise_for_status()
         return response.json()
