@@ -6,7 +6,6 @@ import httpx
 from typing import Any, List, Optional, Dict
 from pydantic import BaseModel
 
-# from gwenlake.core.httpclient import HttpClient
 from gwenlake.core.flow import ClientOAuthFlowProvider
 from gwenlake.core.token import OAuthToken, OAuthTokenResponse
 # from gwenlake.core.profile import load_user_profile
@@ -149,10 +148,7 @@ class Credentials:
 
             hostname = info.get("hostname")
             if hostname:
-                token_uri = hostname + TOKEN_REQUEST_PATH
-            else:
-                hostname = "https://api.gwenlake.com"
-                token_uri = None
+                token_uri = f"{hostname}" + TOKEN_REQUEST_PATH
                         
             return cls(
                 token=info.get("token"),
