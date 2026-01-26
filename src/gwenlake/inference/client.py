@@ -6,9 +6,9 @@ from gwenlake import __version__
 from gwenlake.core.exceptions import GwenlakeException
 from gwenlake.core.credentials import Credentials
 from gwenlake.core.api_client import ApiClient, AsyncApiClient
-from gwenlake.inference.embeddings import Embeddings, AsyncEmbeddings
 from gwenlake.inference.models import Models, AsyncModels
-
+from gwenlake.inference.embeddings import Embeddings, AsyncEmbeddings
+from gwenlake.inference.chat import Chat, AsyncChat
 
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,7 @@ class InferenceClient:
 
     models: Models
     embeddings: Embeddings
+    chat: Chat
 
     def __init__(
         self,
@@ -53,12 +54,14 @@ class InferenceClient:
 
         self.models = Models(self._client)
         self.embeddings = Embeddings(self._client)
+        self.chat = Chat(self._client)
 
 
 class AsyncInferenceClient:
 
     models: AsyncModels
     embeddings: AsyncEmbeddings
+    chat: AsyncChat
 
     def __init__(
         self,
@@ -93,5 +96,6 @@ class AsyncInferenceClient:
             credentials=self._credentials,
         )
 
-        self.models = Models(self._client)
+        self.models = AsyncModels(self._client)
         self.embeddings = AsyncEmbeddings(self._client)
+        self.chat = AsyncChat(self._client)
