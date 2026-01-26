@@ -19,7 +19,7 @@ class Models:
 
 
     def list(self):
-        response = self._client.call_api(
+        response = self._client.send(
             RequestInfo(method="GET", path=f"/models")
         )
         obj = response.json()
@@ -40,23 +40,75 @@ class Models:
         json_payload = json.dumps(payload)
         
         if stream:
-            return self._client.stream_api(
+            return self._client.stream(
                 RequestInfo(
                     method="POST",
                     path="/models",
                     headers={'Content-Type': 'application/json'},
                     data=json_payload,
-                    steal=True,
+                    stream=True,
                 )
             )
 
-        response = self._client.call_api(
+        response = self._client.send(
             RequestInfo(
                 method="POST",
                 path="/models",
                 headers={'Content-Type': 'application/json'},
                 data=json_payload,
-                steal=True,
+                stream=True,
+            )
+        )
+        return response.json()
+
+
+class AsyncModels:
+
+    def __init__(self, client: AsyncApiClient):
+        self._client = client
+
+
+    async def list(self):
+        response = await self._client.send(
+            RequestInfo(method="GET", path=f"/models")
+        )
+        obj = response.json()
+        return obj["data"]
+
+    async def run(
+        self,
+        *,
+        model: str,
+        input: Union[str, Any, List[Any]],
+        stream: bool = False,
+    ):
+    
+        payload = {
+            "input": input,
+            "model": model,
+            "stream": stream
+        }
+
+        json_payload = json.dumps(payload)
+        
+        if stream:
+            return await self._client.stream(
+                RequestInfo(
+                    method="POST",
+                    path="/models",
+                    headers={'Content-Type': 'application/json'},
+                    data=json_payload,
+                    stream=True,
+                )
+            )
+
+        response = await self._client.send(
+            RequestInfo(
+                method="POST",
+                path="/models",
+                headers={'Content-Type': 'application/json'},
+                data=json_payload,
+                stream=True,
             )
         )
         return response.json()

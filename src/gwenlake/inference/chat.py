@@ -38,7 +38,39 @@ class Chat:
             payload["response_format"] = response_format
 
         if stream:
-            return self._client._stream("POST", "/chat/completions", json=payload)
+            return self._client.stream("POST", "/chat/completions", json=payload)
 
-        response = self._client._request("POST", "/chat/completions", json=payload)            
+        response = self._client.send("POST", "/chat/completions", json=payload)            
+        return response.json()
+
+
+class AsyncChat:
+
+    def __init__(self, client: AsyncApiClient):
+        self._client = client
+
+    async def create(
+        self,
+        *,
+        model: str,
+        messages: List,
+        temperature: float = 0.0,
+        stream: bool = False,
+        response_format: Optional[dict] = None,
+    ):
+        
+        payload = { 
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": stream
+        }
+        
+        if response_format:
+            payload["response_format"] = response_format
+
+        if stream:
+            return self._client.stream("POST", "/chat/completions", json=payload)
+
+        response = self._client.send("POST", "/chat/completions", json=payload)            
         return response.json()

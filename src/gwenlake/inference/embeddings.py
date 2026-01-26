@@ -41,7 +41,7 @@ class Embeddings:
             }
             json_payload = json.dumps(payload)
 
-            response = self._client.call_api(
+            response = self._client.send(
                 RequestInfo(
                     method="POST",
                     path="/embeddings",
@@ -92,7 +92,7 @@ class AsyncEmbeddings:
             }
 
             
-            response = await self._client.call_api(
+            response = await self._client.send(
                 RequestInfo(
                     method="POST",
                     path="/embeddings",

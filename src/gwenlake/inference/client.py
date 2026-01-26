@@ -7,7 +7,7 @@ from gwenlake.core.exceptions import GwenlakeException
 from gwenlake.core.credentials import Credentials
 from gwenlake.core.api_client import ApiClient, AsyncApiClient
 from gwenlake.inference.embeddings import Embeddings, AsyncEmbeddings
-from gwenlake.inference.models import Models
+from gwenlake.inference.models import Models, AsyncModels
 
 
 
@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 class InferenceClient:
 
+    models: Models
     embeddings: Embeddings
 
     def __init__(
@@ -56,10 +57,12 @@ class InferenceClient:
 
 class AsyncInferenceClient:
 
+    models: AsyncModels
     embeddings: AsyncEmbeddings
 
     def __init__(
         self,
+        *,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
@@ -90,4 +93,5 @@ class AsyncInferenceClient:
             credentials=self._credentials,
         )
 
+        self.models = Models(self._client)
         self.embeddings = AsyncEmbeddings(self._client)

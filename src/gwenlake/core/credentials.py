@@ -147,6 +147,7 @@ class Credentials:
             info = _config[profile]
 
             hostname = info.get("hostname")
+            token_uri = None
             if hostname:
                 token_uri = f"{hostname}" + TOKEN_REQUEST_PATH
                         
@@ -163,3 +164,43 @@ class Credentials:
             logger.debug(
                 "Error loading credentials from {}: {}".format(config_path, str(e))
             )
+
+    # def save_profile(self, name: str, profile: Profile):
+    #     config_path = _get_default_user_profile_path()
+
+    #     config_dir = os.path.dirname(config_path)
+    #     if not os.path.exists(config_dir):
+    #         try:
+    #             os.makedirs(config_dir)
+    #         except OSError as exc:
+    #             if exc.errno != errno.EEXIST:
+    #                 logger.warning(f"Unable to create {_DIRNAME} directory.")
+    #                 return
+
+    #     config = configparser.ConfigParser()
+
+    #     if os.path.exists(config_path):
+    #         try:
+    #             config.read(config_path)
+    #         except (IOError, ValueError) as exc:
+    #             logger.debug(
+    #                 "Error loading credentials from {}: {}".format(
+    #                     config_path, str(exc)
+    #                 )
+    #             )
+
+    #     if name != "default" and not config.has_section(name):
+    #         config.add_section(name)
+
+    #     config[name]["token"] = profile.token
+    #     config[name]["client_id"] = profile.client_id
+    #     config[name]["client_secret"] = profile.client_secret
+    #     if profile.scopes is not None:
+    #         config[name]["scopes"] = ",".join(profile.scopes)
+    #     config[name]["tenant"] = profile.tenant
+
+    #     try:
+    #         with open(config_path, "w") as f:
+    #             config.write(f)
+    #     except IOError:
+    #         logger.warning("Unable to save profile.")

@@ -39,28 +39,43 @@ class BaseApiClient:
 
     def _create_url(self, request_info: RequestInfo) -> str:
         resource_path = request_info.path
-        path_params = request_info.path_params
+        path_params = request_info.path_params or {}
 
         for k, v in path_params.items():
-            resource_path = resource_path.replace(f"{{{k}}}", quote(v, safe=""))
+            resource_path = resource_path.replace(f"{{{k}}}", quote(str(v), safe=""))
 
         return resource_path
 
     def _create_headers(self, request_info: RequestInfo) -> Dict[str, Any]:
-        return {
+        headers = {
             "User-Agent": f"gwenlake/{__version__}",
             "Authorization": "Bearer " + self._credentials.get_token().access_token,
-            **{
-                key: (
-                    value.astimezone(timezone.utc).isoformat()
-                    if isinstance(value, datetime)
-                    else value if isinstance(value, (bytes, str)) else json.dumps(value)
-                )
-                for key, value in request_info.headers.items()
-                if value is not None
-            },
-        }    
+        }
+        
+        if request_info.headers:
+            for key, value in request_info.headers.items():
+                if value is None:
+                    continue
+                if isinstance(value, datetime):
+                    headers[key] = value.astimezone(timezone.utc).isoformat()
+                elif isinstance(value, (bytes, str)):
+                    headers[key] = value
+                else:
+                    headers[key] = json.dumps(value)
+        
+        return headers
 
+    def _prepare_request_kwargs(self, request_info: RequestInfo) -> Dict[str, Any]:
+        return {
+            "method": request_info.method,
+            "url": self._create_url(request_info),
+            "headers": self._create_headers(request_info),
+            "params": request_info.params,
+            "content": request_info.content,
+            "data": request_info.data,
+            "files": request_info.files,
+            "timeout": request_info.timeout,
+        }
 
 class ApiClient(BaseApiClient):
 
@@ -86,38 +101,15 @@ class ApiClient(BaseApiClient):
             follow_redirects=True,
         )
 
-    def call_api(self, request_info: RequestInfo) -> Any:
-        request = self._client.build_request(
-            method=request_info.method,
-            url=self._create_url(request_info),
-            headers=self._create_headers(request_info),
-            params=request_info.params,
-            content=request_info.content,
-            data=request_info.data,
-            files=request_info.files,
-            timeout=request_info.timeout,
-        )
+    def send(self, request_info: RequestInfo) -> Any:
+        request = self._client.build_request(**self._prepare_request_kwargs(request_info))
+        return self._client.send(request=request, stream=False)
 
-        return self._client.send(
-            request=request,
-            stream=False,
-        )
-
-    def stream_api(self, request_info: RequestInfo) -> Iterator[Dict[str, Any]]:
-        request = self._client.build_request(
-            method=request_info.method,
-            url=self._create_url(request_info),
-            headers=self._create_headers(request_info),
-            params=request_info.params,
-            content=request_info.content,
-            data=request_info.data,
-            files=request_info.files,
-            timeout=request_info.timeout,
-        )
-
+    def stream(self, request_info: RequestInfo) -> Iterator[str]:
+        request = self._client.build_request(**self._prepare_request_kwargs(request_info))        
         with self._client.send(request=request, stream=True) as response:
-            for streamed_response in response.iter_lines():
-                yield streamed_response
+            for line in response.iter_lines():
+                yield line
 
 class AsyncApiClient(BaseApiClient):
 
@@ -143,35 +135,12 @@ class AsyncApiClient(BaseApiClient):
             follow_redirects=True,
         )
 
-    async def call_api(self, request_info: RequestInfo) -> Any:
-        request = self._client.build_request(
-            method=request_info.method,
-            url=self._create_url(request_info),
-            headers=self._create_headers(request_info),
-            params=request_info.params,
-            content=request_info.content,
-            data=request_info.data,
-            files=request_info.files,
-            timeout=request_info.timeout,
-        )
+    async def send(self, request_info: RequestInfo) -> Any:
+        request = self._client.build_request(**self._prepare_request_kwargs(request_info))
+        return await self._client.send(request=request, stream=False)
 
-        return await self._client.send(
-            request=request,
-            stream=False,
-        )
-
-    async def stream_api(self, request_info: RequestInfo) -> AsyncIterator[Dict[str, Any]]:
-        request = self._client.build_request(
-            method=request_info.method,
-            url=self._create_url(request_info),
-            headers=self._create_headers(request_info),
-            params=request_info.params,
-            content=request_info.content,
-            data=request_info.data,
-            files=request_info.files,
-            timeout=request_info.timeout,
-        )
-
+    async def stream(self, request_info: RequestInfo) -> AsyncIterator[str]:
+        request = self._client.build_request(**self._prepare_request_kwargs(request_info))
         async with self._client.send(request=request, stream=True) as response:
-            async for streamed_response in response.iter_lines():
-                yield streamed_response
+            async for line in response.iter_lines():
+                yield line
