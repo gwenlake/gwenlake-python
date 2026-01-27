@@ -1,18 +1,9 @@
-from __future__ import annotations
+from typing import List, Union
 
-import json
-from typing import TYPE_CHECKING, List, Union
-from typing_extensions import Literal
-
-from gwenlake.core.api_client import ApiClient, AsyncApiClient, RequestInfo
-from gwenlake.core.schemas import EmbeddingResponse, Embedding, Usage
-
-
-__all__ = ["Embeddings"]
-
+from gwenlake.api_client import ApiClient, AsyncApiClient, RequestOptions
+from gwenlake.types import EmbeddingResponse, Embedding, Usage
 
 BATCH_SIZE = 100
-
 
 class Embeddings:
 
@@ -39,14 +30,14 @@ class Embeddings:
                 "input": batch,
                 "model": model,
             }
-            json_payload = json.dumps(payload)
+            # json_payload = json.dumps(payload)
 
             response = self._client.send(
-                RequestInfo(
+                RequestOptions(
                     method="POST",
-                    path="/embeddings",
+                    url="/embeddings",
                     headers={'Content-Type': 'application/json'},
-                    data=json_payload,
+                    json_data=payload,
                 )
             )
             response.raise_for_status()
@@ -93,9 +84,9 @@ class AsyncEmbeddings:
 
             
             response = await self._client.send(
-                RequestInfo(
+                RequestOptions(
                     method="POST",
-                    path="/embeddings",
+                    url="/embeddings",
                     headers={'Content-Type': 'application/json'},
                     data=payload,
                 )

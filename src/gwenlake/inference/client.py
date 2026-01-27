@@ -3,9 +3,9 @@ import logging
 from typing import Optional
 
 from gwenlake import __version__
-from gwenlake.core.exceptions import GwenlakeException
-from gwenlake.core.credentials import Credentials
-from gwenlake.core.api_client import ApiClient, AsyncApiClient
+from gwenlake.exceptions import GwenlakeException
+from gwenlake.constants import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT
+from gwenlake.api_client import ApiClient, AsyncApiClient, Credentials
 from gwenlake.inference.models import Models, AsyncModels
 from gwenlake.inference.embeddings import Embeddings, AsyncEmbeddings
 from gwenlake.inference.chat import Chat, AsyncChat
@@ -24,10 +24,9 @@ class InferenceClient:
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-
-        super().__init__()
 
         self._api_key = api_key    
         if self._api_key is None:
@@ -50,6 +49,8 @@ class InferenceClient:
         self._client = ApiClient(
             base_url=self._base_url,
             credentials=self._credentials,
+            max_retries=max_retries,
+            timeout=timeout,
         )
 
         self.models = Models(self._client)
@@ -68,7 +69,8 @@ class AsyncInferenceClient:
         *,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: Optional[float] = None,
+        timeout: Optional[float] = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
 
         super().__init__()
@@ -94,6 +96,8 @@ class AsyncInferenceClient:
         self._client = AsyncApiClient(
             base_url=self._base_url,
             credentials=self._credentials,
+            max_retries=max_retries,
+            timeout=timeout,
         )
 
         self.models = AsyncModels(self._client)

@@ -1,22 +1,20 @@
 from typing import Any, Dict
 from functools import cached_property
 
-from gwenlake.core.credentials import Credentials
-from gwenlake.core.api_client import ApiClient, RequestInfo
+from gwenlake.api_client import ApiClient, RequestOptions
 from gwenlake.factory.files import FilesClient
 
 
 class DatasetsClient:
 
-    def __init__(self, credentials: Credentials):
-        self._credentials = credentials
-        self._client = ApiClient(credentials=credentials, prefix="/api/v1")
+    def __init__(self, client: ApiClient):
+        self._client = client
     
     def get(self, id: str) -> Any:
         response = self._client.call_api(
-            RequestInfo(
+            RequestOptions(
                 method="GET",
-                path=f"/datasets/{id}",
+                url=f"/datasets/{id}",
                 headers={"Accept": "application/json"},
             ),
         )
@@ -26,9 +24,9 @@ class DatasetsClient:
 
     def create(self, data: Dict[str, Any]) -> Any:
         response = self._client.call_api(
-            RequestInfo(
+            RequestOptions(
                 method="POST",
-                path="/datasets",
+                url="/datasets",
                 headers={"Accept": "application/json", "Content-Type": "application/json"},
                 body=data,
             ),
@@ -38,9 +36,9 @@ class DatasetsClient:
 
     def delete(self, id: str) -> bool:
         response = self._client.call_api(
-            RequestInfo(
+            RequestOptions(
                 method="DELETE",
-                path=f"/datasets/{id}",
+                url=f"/datasets/{id}",
                 headers={"Accept": "application/json"},
             ),
         )

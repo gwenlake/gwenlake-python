@@ -1,11 +1,6 @@
-import json
-from typing import TYPE_CHECKING, List, Dict, Any, Union, Iterator
+from typing import List, Dict, Any, Union, Iterator
 
-from gwenlake.core.api_client import ApiClient, AsyncApiClient, RequestInfo
-
-
-__all__ = ["Models"]
-
+from gwenlake.api_client import ApiClient, AsyncApiClient, RequestOptions
 
 
 class Models:
@@ -16,7 +11,7 @@ class Models:
 
     def list(self) -> List[Dict[str, Any]]:
         response = self._client.send(
-            RequestInfo(method="GET", path=f"/models")
+            RequestOptions(method="GET", url=f"/models")
         )
         response.raise_for_status()
         obj = response.json()
@@ -34,11 +29,11 @@ class Models:
             "stream": stream
         }
         
-        request_info = RequestInfo(
+        request_info = RequestOptions(
             method="POST",
-            path="/models",
+            url="/models",
             headers={'Content-Type': 'application/json'},
-            data=json.dumps(payload),
+            json_data=payload,
         )
 
         if stream:
@@ -56,7 +51,7 @@ class AsyncModels:
 
     async def list(self) -> List[Dict[str, Any]]:
         response = await self._client.send(
-            RequestInfo(method="GET", path=f"/models")
+            RequestOptions(method="GET", url=f"/models")
         )
         response.raise_for_status()
         obj = response.json()
@@ -76,11 +71,11 @@ class AsyncModels:
             "stream": stream
         }
 
-        request_info = RequestInfo(
+        request_info = RequestOptions(
             method="POST",
-            path="/models",
+            url="/models",
             headers={'Content-Type': 'application/json'},
-            data=json.dumps(payload),
+            json_data=payload,
         )
 
         if stream:

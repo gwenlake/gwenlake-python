@@ -1,9 +1,9 @@
 [project]
 name = "gwenlake"
-version = "0.4.1"
-description = "Gwenlake framework"
+version = "0.5.1"
+description = "Gwenlake Python Client"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.12.5",
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-gwenlake = "gwenlake:main"
+gwenlake = "gwenlake.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.8.19,<0.9.0"]

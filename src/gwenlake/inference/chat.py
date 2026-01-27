@@ -1,7 +1,6 @@
-import json
 from typing import Optional, List, Dict, Any, Union, AsyncIterator
 
-from gwenlake.core.api_client import ApiClient, AsyncApiClient, RequestInfo
+from gwenlake.api_client import ApiClient, AsyncApiClient, RequestOptions
 
 
 class Chat:
@@ -24,16 +23,16 @@ class Chat:
             "messages": messages,
             "temperature": temperature,
             "stream": stream
-            }
+        }
         
         if response_format:
             payload["response_format"] = response_format
 
-        request_info = RequestInfo(
+        request_info = RequestOptions(
             method="POST",
             path="/chat/completions",
             headers={"Content-Type": "application/json"},
-            data=json.dumps(payload),
+            json_data=payload,
         )
 
         if stream:
@@ -69,11 +68,11 @@ class AsyncChat:
         if response_format:
             payload["response_format"] = response_format
 
-        request_info = RequestInfo(
+        request_info = RequestOptions(
             method="POST",
             path="/chat/completions",
             headers={"Content-Type": "application/json"},
-            data=json.dumps(payload),
+            json_data=payload,
         )
 
         if stream:

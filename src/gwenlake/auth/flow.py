@@ -1,8 +1,7 @@
 import httpx
 from typing import List, Optional
 
-# from gwenlake.core.httpclient import HttpClient
-from gwenlake.core.token import OAuthToken, OAuthTokenResponse
+from gwenlake.auth.token import OAuthToken, OAuthTokenResponse
 
 
 class OAuthUtils:

@@ -6,9 +6,8 @@ import httpx
 from typing import Any, List, Optional, Dict
 from pydantic import BaseModel
 
-from gwenlake.core.flow import ClientOAuthFlowProvider
-from gwenlake.core.token import OAuthToken, OAuthTokenResponse
-# from gwenlake.core.profile import load_user_profile
+from gwenlake.auth.flow import ClientOAuthFlowProvider
+from gwenlake.auth.token import OAuthToken, OAuthTokenResponse
 
 
 GWENLAKE_PROFILES = ".gwenlake"
@@ -50,7 +49,7 @@ class Credentials:
             if not isinstance(self._scopes, list):
                 raise TypeError(f"The scopes must be a list, not {type(self._scopes)}.")
 
-        self._client: Optional[HttpClient] = None
+        self._client: Optional[httpx.Client] = None
         self._should_refresh = should_refresh
         self._stop_refresh_event = threading.Event()
         self._server_oauth_flow_provider = None
