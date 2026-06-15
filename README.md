@@ -1,149 +1,118 @@
 # Gwenlake Python Library
 
 The Gwenlake Python library provides convenient access to the Gwenlake API
-from applications written in the Python language. It includes a
-pre-defined set of classes for API resources that initialize
-themselves dynamically from API responses which makes it compatible
-with a wide range of versions of the Gwenlake API.
-
+from applications written in Python. A single `Gwenlake` client gives you access
+to your catalog — projects, datasets, files and SQL.
 
 ## Installation
-
-If you just want to use the package, just run:
 
 ```sh
 pip install -U git+https://github.com/gwenlake/gwenlake-python
 ```
 
-## Usage
+## Authentication
 
-The library needs to be configured with your account's secret key. Either set it as the `GWENLAKE_API_KEY` environment variable before using the library:
+The client authenticates with a Bearer token, resolved in this order:
+
+1. an explicit `api_key` / `credentials` passed to the client,
+2. a named `profile`,
+3. the `GWENLAKE_API_KEY` environment variable,
+4. the `default` profile in `~/.gwenlake/credentials`.
 
 ```bash
 export GWENLAKE_API_KEY='sk-...'
 ```
 
-Or set `api_key` to its value with the Client:
-
 ```python
 import gwenlake
 
-client = gwenlake.Gwenlake(api_key = "sk-...")
-```
-## Models
+# uses GWENLAKE_API_KEY, or the default ~/.gwenlake/credentials profile
+client = gwenlake.Gwenlake()
 
-Use our inference platform to chat with models.
+# or pass the key explicitly
+client = gwenlake.Gwenlake(api_key="sk-...")
 
-### List models
-```python
-r = client.models.list()
-print(r)
+# or pick a profile from ~/.gwenlake/credentials
+client = gwenlake.Gwenlake(profile="myteam")
 ```
 
-### Chat
-```python
-messages = [
-    {
-        "role": "user",
-        "content": "Anything about France?"
-    }
-]
+The `~/.gwenlake/credentials` file is an INI file with one section per profile,
+holding either a static `token` (API key) or OAuth2 `client_id` / `client_secret`.
 
-r = client.chat.create(model="meta/llama-3.1-8b", messages=messages)
-print(r)
+## Projects
+
+```python
+projects = client.projects.list()
+for p in projects:
+    print(p["alias"], p["id"])
+
+project = client.projects.get("res.project.…")
 ```
 
-### Chat with streaming
-
-The SDK also includes helpers to process streams and handle incoming events.
+## Datasets
 
 ```python
-stream = client.chat.stream(model="meta/llama-3.1-8b", messages=messages)
-for chunk in stream:
-    if chunk["choices"][0]["delta"]["content"]:
-        print(chunk["choices"][0]["delta"]["content"], end="")
-```
+datasets = client.datasets.list()
+for d in datasets:
+    print(d["alias"], d["id"])
 
-## Embeddings
-
-Use our inference platform for embeddings using [intfloat/e5-base-v2](https://huggingface.co/intfloat/e5-base-v2)
-or the multilingual [intfloat/multilingual-e5-base](https://huggingface.co/intfloat/multilingual-e5-base) model (supports 100 languages).
-
-```python
-list_of_texts = [
-    "Olympic Games will be in Paris in 2024",
-    "Do Not Watch This Movie! Not funny at all",
-    "Can you help me write an email to my best friend?",
-]
-
-response = client.embeddings.create(input=list_of_texts, model="e5-base-v2")
-for item in response.data:
-    print(item.embedding)
-```
-
-## Prompts
-
-Discover and share prompts in the Gwenlake Hub.
-
-### List prompts
-```python
-response = client.prompts.list()
-print(response)
-```
-
-### Get a prompt
-```python
-prompt = client.prompts.get("gwenlake/rag")
-print(prompt)
-
-```
-
-
-## Text Generation
-
-Discover how to automatically combine prompts, datasets and models.
-
-### Retrieval Augmented Generation (RAG)
-
-```python
-retriever = {
-    "dataset": "gwenlake/csrd",
-    "limit": 10
-}
-
-response = client.textgeneration.create(
-    model="meta/llama-3.1-8b",
-    prompt="gwenlake/rag",
-    input={"query": "Explain CSRD"},
-    retriever=retriever)
-print(response["output"][0]["text"])
-
+dataset = client.datasets.get("res.dataset.…")
 ```
 
 ## Files
 
-Upload files on your private datasets.
+Files live inside a dataset.
 
 ```python
-import gwenlake
-
-client = gwenlake.Gwenlake()
-
-# upload a file into a dataset
-r = client.files.upload("myteam/mydataset", file="test.pdf")
-print(r)
-
-# upload a file in a subdir
-r = client.files.upload("myteam/mydataset/docs", file="test.pdf")
-print(r)
+dataset_id = "res.dataset.…"
 
 # list files
-r = client.files.list("myteam/mydataset")
-print(r)
+for f in client.files.list(dataset_id):
+    print(f["filename"], f["file_size"])
 
-r = client.files.list("myteam/mydataset/docs")
-print(r)
+# upload a local file (optionally into a subdirectory with path=...)
+client.files.upload(dataset_id, "report.pdf")
+client.files.upload(dataset_id, "report.pdf", path="docs")
 
-# get file
-file = client.files.get("myteam/mydataset/test.pdf")
+# download a file
+content = client.files.download(dataset_id, "report.pdf")
+
+# presigned URL / delete
+url = client.files.presigned_url(dataset_id, "report.pdf")
+client.files.delete(dataset_id, "report.pdf")
 ```
+
+## SQL
+
+Run SQL against a dataset (DuckDB), referencing it as
+`'<project_alias>.<dataset_alias>'`. With `format="json"` the rows are returned
+under `data`:
+
+```python
+result = client.statements.create(
+    statement="SELECT * FROM 'flights.flight-data' LIMIT 10",
+    format="json",
+)
+for row in result["data"]:
+    print(row)
+```
+
+Pass a `connection_id` to run the statement against a connection's native engine
+(PostgreSQL, S3, …) instead of a dataset.
+
+## Async
+
+Every resource is also available on `AsyncGwenlake`:
+
+```python
+import asyncio
+import gwenlake
+
+async def main():
+    client = gwenlake.AsyncGwenlake()
+    print(await client.projects.list())
+
+asyncio.run(main())
+```
+
+See [`examples/`](examples/) for runnable scripts.
