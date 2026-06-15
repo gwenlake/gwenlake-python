@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from gwenlake.version import __version__
 from gwenlake.constants import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, DEFAULT_CONNECTION_LIMITS
-from gwenlake.auth.credentials import Credentials
+from gwenlake.credentials import Credentials
 
 
 # duplicate of the above but without our custom file support
@@ -171,3 +171,142 @@ class AsyncApiClient(BaseApiClient):
         async with self._client.send(request=request, stream=True) as response:
             async for line in response.iter_lines():
                 yield line
+
+
+# ---------------------------------------------------------------------------
+# High-level unified client
+# ---------------------------------------------------------------------------
+
+import os
+
+from gwenlake.exceptions import GwenlakeException
+from gwenlake.models import Models, AsyncModels
+from gwenlake.chat import Chat, AsyncChat
+from gwenlake.embeddings import Embeddings, AsyncEmbeddings
+from gwenlake.datasets import Datasets, AsyncDatasets
+from gwenlake.files import Files, AsyncFiles
+from gwenlake.projects import Projects, AsyncProjects
+from gwenlake.statements import Statements, AsyncStatements
+
+
+# Single gateway: every resource (inference + catalog) is served under /v1, so
+# the base URL carries the version and resource paths are version-agnostic
+# (/models, /datasets, /filesystem/..., /sql/...).
+DEFAULT_BASE_URL = "https://api.gwenlake.com/v1"
+
+
+def _resolve_credentials(
+    api_key: Optional[str] = None,
+    credentials: Optional[Credentials] = None,
+    profile: Optional[str] = None,
+) -> Credentials:
+    """Resolve credentials from (in order): an explicit Credentials object, an
+    api_key (or token), a named profile, the GWENLAKE_API_KEY env var, then the
+    'default' profile in ~/.gwenlake/credentials."""
+    if credentials is not None:
+        return credentials
+    if api_key is not None:
+        return Credentials(token=api_key)
+    if profile is not None:
+        creds = Credentials.from_profile(profile)
+        if creds is None or not creds.is_configured:
+            raise GwenlakeException(
+                f"No usable credentials for profile '{profile}' in ~/.gwenlake/credentials"
+            )
+        return creds
+
+    env_key = os.environ.get("GWENLAKE_API_KEY")
+    if env_key:
+        return Credentials(token=env_key)
+
+    creds = Credentials.from_profile("default")
+    if creds is not None and creds.is_configured:
+        return creds
+
+    raise GwenlakeException(
+        "No credentials provided. Pass api_key=..., credentials=... or profile=..., "
+        "set the GWENLAKE_API_KEY environment variable, or configure ~/.gwenlake/credentials."
+    )
+
+
+def _resolve_base_url(base_url: Optional[str] = None) -> str:
+    return base_url or os.environ.get("GWENLAKE_BASE_URL") or DEFAULT_BASE_URL
+
+
+class Gwenlake:
+    """Unified Gwenlake client exposing every API resource through a single
+    authenticated transport (inference + catalog via one gateway)."""
+
+    models: Models
+    chat: Chat
+    embeddings: Embeddings
+    datasets: Datasets
+    files: Files
+    projects: Projects
+    statements: Statements
+
+    def __init__(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        credentials: Optional[Credentials] = None,
+        profile: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: Optional[float] = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ) -> None:
+        self._credentials = _resolve_credentials(api_key=api_key, credentials=credentials, profile=profile)
+        self._base_url = _resolve_base_url(base_url)
+        self._client = ApiClient(
+            base_url=self._base_url,
+            credentials=self._credentials,
+            max_retries=max_retries,
+            timeout=timeout,
+        )
+
+        self.models = Models(self._client)
+        self.chat = Chat(self._client)
+        self.embeddings = Embeddings(self._client)
+        self.datasets = Datasets(self._client)
+        self.files = Files(self._client)
+        self.projects = Projects(self._client)
+        self.statements = Statements(self._client)
+
+
+class AsyncGwenlake:
+    """Asynchronous counterpart of :class:`Gwenlake`."""
+
+    models: AsyncModels
+    chat: AsyncChat
+    embeddings: AsyncEmbeddings
+    datasets: AsyncDatasets
+    files: AsyncFiles
+    projects: AsyncProjects
+    statements: AsyncStatements
+
+    def __init__(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        credentials: Optional[Credentials] = None,
+        profile: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: Optional[float] = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ) -> None:
+        self._credentials = _resolve_credentials(api_key=api_key, credentials=credentials, profile=profile)
+        self._base_url = _resolve_base_url(base_url)
+        self._client = AsyncApiClient(
+            base_url=self._base_url,
+            credentials=self._credentials,
+            max_retries=max_retries,
+            timeout=timeout,
+        )
+
+        self.models = AsyncModels(self._client)
+        self.chat = AsyncChat(self._client)
+        self.embeddings = AsyncEmbeddings(self._client)
+        self.datasets = AsyncDatasets(self._client)
+        self.files = AsyncFiles(self._client)
+        self.projects = AsyncProjects(self._client)
+        self.statements = AsyncStatements(self._client)

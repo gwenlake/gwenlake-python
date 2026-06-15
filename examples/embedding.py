@@ -1,7 +1,7 @@
 import pandas as pd
-import gwenlake
+from gwenlake import Gwenlake
 
-client = gwenlake.Client(api_key="sk_XXX")
+client = Gwenlake()
 
 list_of_texts = [
     "Do Not Watch This Movie!",

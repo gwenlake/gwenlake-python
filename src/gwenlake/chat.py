@@ -1,6 +1,6 @@
 from typing import Optional, List, Dict, Any, Union, AsyncIterator
 
-from gwenlake.api_client import ApiClient, AsyncApiClient, RequestOptions
+from gwenlake.client import ApiClient, AsyncApiClient, RequestOptions
 
 
 class Chat:
@@ -30,7 +30,7 @@ class Chat:
 
         request_info = RequestOptions(
             method="POST",
-            path="/chat/completions",
+            url="/chat/completions",
             headers={"Content-Type": "application/json"},
             json_data=payload,
         )
@@ -70,7 +70,7 @@ class AsyncChat:
 
         request_info = RequestOptions(
             method="POST",
-            path="/chat/completions",
+            url="/chat/completions",
             headers={"Content-Type": "application/json"},
             json_data=payload,
         )

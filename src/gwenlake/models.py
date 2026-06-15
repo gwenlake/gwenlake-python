@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Union, Iterator
 
-from gwenlake.api_client import ApiClient, AsyncApiClient, RequestOptions
+from gwenlake.client import ApiClient, AsyncApiClient, RequestOptions
 
 
 class Models:
@@ -11,7 +11,7 @@ class Models:
 
     def list(self) -> List[Dict[str, Any]]:
         response = self._client.send(
-            RequestOptions(method="GET", url=f"/models")
+            RequestOptions(method="GET", url="/models")
         )
         response.raise_for_status()
         obj = response.json()
@@ -51,7 +51,7 @@ class AsyncModels:
 
     async def list(self) -> List[Dict[str, Any]]:
         response = await self._client.send(
-            RequestOptions(method="GET", url=f"/models")
+            RequestOptions(method="GET", url="/models")
         )
         response.raise_for_status()
         obj = response.json()

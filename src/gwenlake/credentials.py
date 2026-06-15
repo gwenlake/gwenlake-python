@@ -6,8 +6,8 @@ import httpx
 from typing import Any, List, Optional, Dict
 from pydantic import BaseModel
 
-from gwenlake.auth.flow import ClientOAuthFlowProvider
-from gwenlake.auth.token import OAuthToken, OAuthTokenResponse
+from gwenlake.flow import ClientOAuthFlowProvider
+from gwenlake.token import OAuthToken, OAuthTokenResponse
 
 
 GWENLAKE_PROFILES = ".gwenlake"
@@ -83,6 +83,11 @@ class Credentials:
     def url(self) -> str:
         return self._get_oauth_client().base_url.host
 
+    @property
+    def is_configured(self) -> bool:
+        """True when these credentials can produce a token (static token or OAuth2)."""
+        return self._token is not None or self._server_oauth_flow_provider is not None
+
     def sign_out(self) -> SignOutResponse:
         self._revoke_token()
         self._token = None
@@ -128,78 +133,48 @@ class Credentials:
                 self._client = httpx.Client(base_url=self._token_uri)
         return self._client
     
+    @staticmethod
+    def _default_config_path() -> str:
+        base = os.getenv("APPDATA") if os.name == "nt" else None
+        if not base:
+            base = os.path.expanduser("~")
+        return os.path.join(base, GWENLAKE_PROFILES, "credentials")
+
     @classmethod
-    def from_profile(cls, profile: str = "default"):
-        try:                
-            config_path = None
+    def from_profile(cls, profile: str = "default") -> Optional["Credentials"]:
+        """Load credentials from the ``~/.gwenlake/credentials`` INI file.
 
-            if os.name == "nt":
-                config_path = os.getenv("APPDATA")
-            if not config_path:
-                config_path = os.path.expanduser("~")
+        Each section is a named profile and may hold either a static ``token``
+        (API key) or OAuth2 ``client_id``/``client_secret`` settings. Returns
+        ``None`` when the file or the requested profile does not exist.
+        """
+        config_path = cls._default_config_path()
 
-            config_path = os.path.join(config_path, GWENLAKE_PROFILES, "credentials")
+        config = configparser.ConfigParser()
+        try:
+            read = config.read(config_path)
+        except (IOError, configparser.Error) as e:
+            logger.debug("Error loading credentials from %s: %s", config_path, e)
+            return None
 
-            _config = configparser.ConfigParser()
-            _config.read(config_path)
+        if not read or not config.has_section(profile):
+            logger.debug("Profile '%s' not found in %s", profile, config_path)
+            return None
 
-            info = _config[profile]
+        info = config[profile]
 
-            hostname = info.get("hostname")
-            token_uri = None
-            if hostname:
-                token_uri = f"{hostname}" + TOKEN_REQUEST_PATH
-                        
-            return cls(
-                token=info.get("token"),
-                hostname=hostname,
-                token_uri=token_uri,
-                client_id=info.get("client_id"),
-                client_secret=info.get("client_secret"),
-                scopes = info.get("scopes"),
-            )
-    
-        except (IOError, ValueError) as e:
-            logger.debug(
-                "Error loading credentials from {}: {}".format(config_path, str(e))
-            )
+        hostname = info.get("hostname")
+        token_uri = f"{hostname}{TOKEN_REQUEST_PATH}" if hostname else None
 
-    # def save_profile(self, name: str, profile: Profile):
-    #     config_path = _get_default_user_profile_path()
+        scopes = info.get("scopes")
+        if scopes:
+            scopes = [s.strip() for s in scopes.split(",") if s.strip()]
 
-    #     config_dir = os.path.dirname(config_path)
-    #     if not os.path.exists(config_dir):
-    #         try:
-    #             os.makedirs(config_dir)
-    #         except OSError as exc:
-    #             if exc.errno != errno.EEXIST:
-    #                 logger.warning(f"Unable to create {_DIRNAME} directory.")
-    #                 return
-
-    #     config = configparser.ConfigParser()
-
-    #     if os.path.exists(config_path):
-    #         try:
-    #             config.read(config_path)
-    #         except (IOError, ValueError) as exc:
-    #             logger.debug(
-    #                 "Error loading credentials from {}: {}".format(
-    #                     config_path, str(exc)
-    #                 )
-    #             )
-
-    #     if name != "default" and not config.has_section(name):
-    #         config.add_section(name)
-
-    #     config[name]["token"] = profile.token
-    #     config[name]["client_id"] = profile.client_id
-    #     config[name]["client_secret"] = profile.client_secret
-    #     if profile.scopes is not None:
-    #         config[name]["scopes"] = ",".join(profile.scopes)
-    #     config[name]["tenant"] = profile.tenant
-
-    #     try:
-    #         with open(config_path, "w") as f:
-    #             config.write(f)
-    #     except IOError:
-    #         logger.warning("Unable to save profile.")
+        return cls(
+            token=info.get("token"),
+            hostname=hostname,
+            token_uri=token_uri,
+            client_id=info.get("client_id"),
+            client_secret=info.get("client_secret"),
+            scopes=scopes,
+        )

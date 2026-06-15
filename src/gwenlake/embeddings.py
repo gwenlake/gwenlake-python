@@ -1,6 +1,6 @@
 from typing import List, Union
 
-from gwenlake.api_client import ApiClient, AsyncApiClient, RequestOptions
+from gwenlake.client import ApiClient, AsyncApiClient, RequestOptions
 from gwenlake.types import EmbeddingResponse, Embedding, Usage
 
 BATCH_SIZE = 100
@@ -88,7 +88,7 @@ class AsyncEmbeddings:
                     method="POST",
                     url="/embeddings",
                     headers={'Content-Type': 'application/json'},
-                    data=payload,
+                    json_data=payload,
                 )
             )
             response.raise_for_status()

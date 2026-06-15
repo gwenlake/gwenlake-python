@@ -28,7 +28,7 @@ Or set `api_key` to its value with the Client:
 ```python
 import gwenlake
 
-client = gwenlake.Client(api_key = "sk-...")
+client = gwenlake.Gwenlake(api_key = "sk-...")
 ```
 ## Models
 
@@ -127,7 +127,7 @@ Upload files on your private datasets.
 ```python
 import gwenlake
 
-client = gwenlake.Client()
+client = gwenlake.Gwenlake()
 
 # upload a file into a dataset
 r = client.files.upload("myteam/mydataset", file="test.pdf")

@@ -1,6 +1,6 @@
 import gwenlake
 
-client = gwenlake.Client(api_key="xxx")
+client = gwenlake.Gwenlake(api_key="xxx")
 
 # list models
 r = client.models.list()
