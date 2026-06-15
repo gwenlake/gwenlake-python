@@ -13,43 +13,43 @@ client = gwenlake.Gwenlake()  # default credentials
 # 1) transform_df: the body receives Inputs as pandas DataFrames and returns the
 #    DataFrame to write to the Output (written automatically).
 @transform_df(
-    donnees_brutes=Input("Projet_A.utilisateurs"),
-    donnees_nettoyees=Output("Projet_A.utilisateurs_filtres"),
+    raw_users=Input("Project_A.users"),
+    clean_users=Output("Project_A.users_filtered"),
 )
-def ma_transformation(donnees_brutes):
-    df = donnees_brutes
-    majeurs = df[df["age"] >= 18].copy()
-    majeurs["nom_majuscule"] = majeurs["nom"].str.upper()
-    return majeurs
+def clean_adults(raw_users):
+    df = raw_users
+    adults = df[df["age"] >= 18].copy()
+    adults["name_upper"] = adults["name"].str.upper()
+    return adults
 
 
 # 2) transform: the body receives TransformInput/TransformOutput objects and
 #    reads/writes explicitly. Works for tabular data...
 @transform(
-    mon_entree=Input("Projet_A.utilisateurs"),
-    mon_sortie=Output("Projet_A.utilisateurs_distinct"),
+    my_input=Input("Project_A.users"),
+    my_output=Output("Project_A.users_distinct"),
 )
-def transformation_avancee(mon_entree, mon_sortie):
-    df = mon_entree.dataframe()
-    df_resultat = df.drop_duplicates()
-    # mode="replace" (defaut) vide le dataset avant d'ecrire (snapshot facon
-    # Foundry) ; mode="append" ajoute le fichier sans rien supprimer.
-    mon_sortie.write_dataframe(df_resultat, mode="replace")
+def dedupe_users(my_input, my_output):
+    df = my_input.dataframe()
+    result = df.drop_duplicates()
+    # mode="replace" (default) clears the dataset before writing (Foundry-style
+    # snapshot); mode="append" adds the file without deleting anything.
+    my_output.write_dataframe(result, mode="replace")
 
 
 # 3) ...and for raw files (images, PDFs, anything non-tabular) via .filesystem().
 @transform(
-    images=Input("Projet_A.scans"),
-    vignettes=Output("Projet_A.scans_traites"),
+    images=Input("Project_A.scans"),
+    thumbnails=Output("Project_A.scans_processed"),
 )
-def traiter_fichiers(images, vignettes):
+def process_files(images, thumbnails):
     src = images.filesystem()
-    dst = vignettes.filesystem()
+    dst = thumbnails.filesystem()
     for entry in src.ls():
         name = entry["filename"]
         data = src.read(name)
         # ... process the bytes (PDF, image, ...) ...
-        with dst.open(f"copie/{name}", "wb") as f:
+        with dst.open(f"copy/{name}", "wb") as f:
             f.write(data)
 
 
@@ -58,19 +58,19 @@ def traiter_fichiers(images, vignettes):
 #    back out as part-00000.parquet, part-00001.parquet, ... (replace clears the
 #    output once up front). Pass order_by= for a guaranteed-deterministic split.
 @transform(
-    gros_dataset=Input("Projet_A.evenements"),
-    resultat=Output("Projet_A.evenements_propres"),
+    big_dataset=Input("Project_A.events"),
+    result=Output("Project_A.events_clean"),
 )
-def transformation_par_chunks(gros_dataset, resultat):
+def transform_in_chunks(big_dataset, result):
     chunks = (
-        chunk[chunk["valide"]]
-        for chunk in gros_dataset.iter_dataframes(chunk_size=50_000, order_by="id")
+        chunk[chunk["valid"]]
+        for chunk in big_dataset.iter_dataframes(chunk_size=50_000, order_by="id")
     )
-    resultat.write_dataframes(chunks, mode="replace")
+    result.write_dataframes(chunks, mode="replace")
 
 
 if __name__ == "__main__":
-    ma_transformation(client)
-    transformation_avancee(client)
-    traiter_fichiers(client)
-    transformation_par_chunks(client)
+    clean_adults(client)
+    dedupe_users(client)
+    process_files(client)
+    transform_in_chunks(client)

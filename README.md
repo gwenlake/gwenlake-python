@@ -128,15 +128,15 @@ written automatically (snapshot/replace by default):
 from gwenlake.transforms import transform_df, Input, Output
 
 @transform_df(
-    donnees_brutes=Input("Projet_A.utilisateurs"),
-    donnees_nettoyees=Output("Projet_A.utilisateurs_filtres"),
+    raw_users=Input("Project_A.users"),
+    clean_users=Output("Project_A.users_filtered"),
 )
-def ma_transformation(donnees_brutes):
-    df = donnees_brutes[donnees_brutes["age"] >= 18].copy()
-    df["nom_majuscule"] = df["nom"].str.upper()
+def clean_adults(raw_users):
+    df = raw_users[raw_users["age"] >= 18].copy()
+    df["name_upper"] = df["name"].str.upper()
     return df
 
-ma_transformation(client)   # reads, computes, writes
+clean_adults(client)   # reads, computes, writes
 ```
 
 `transform` — the lower-level form: the function receives `TransformInput` /
@@ -147,23 +147,23 @@ data (images, PDFs, …) via `.filesystem()`:
 from gwenlake.transforms import transform, Input, Output
 
 @transform(
-    mon_entree=Input("Projet_A.utilisateurs"),
-    mon_sortie=Output("Projet_A.utilisateurs_distinct"),
+    my_input=Input("Project_A.users"),
+    my_output=Output("Project_A.users_distinct"),
 )
-def transformation_avancee(mon_entree, mon_sortie):
-    df = mon_entree.dataframe()
+def dedupe_users(my_input, my_output):
+    df = my_input.dataframe()
     # mode="replace" (default) clears the dataset first; "append" keeps existing files
-    mon_sortie.write_dataframe(df.drop_duplicates(), mode="replace")
+    my_output.write_dataframe(df.drop_duplicates(), mode="replace")
 
 @transform(
-    images=Input("Projet_A.scans"),
-    vignettes=Output("Projet_A.scans_traites"),
+    images=Input("Project_A.scans"),
+    thumbnails=Output("Project_A.scans_processed"),
 )
-def traiter_fichiers(images, vignettes):
-    src, dst = images.filesystem(), vignettes.filesystem()
+def process_files(images, thumbnails):
+    src, dst = images.filesystem(), thumbnails.filesystem()
     for entry in src.ls():
         data = src.read(entry["filename"])          # raw bytes (PDF, image, …)
-        with dst.open(f"copie/{entry['filename']}", "wb") as f:
+        with dst.open(f"copy/{entry['filename']}", "wb") as f:
             f.write(data)
 ```
 
@@ -173,15 +173,15 @@ everything at once. `iter_dataframes()` yields `pandas.DataFrame` chunks and
 
 ```python
 @transform(
-    gros_dataset=Input("Projet_A.evenements"),
-    resultat=Output("Projet_A.evenements_propres"),
+    big_dataset=Input("Project_A.events"),
+    result=Output("Project_A.events_clean"),
 )
-def transformation_par_chunks(gros_dataset, resultat):
+def transform_in_chunks(big_dataset, result):
     chunks = (
-        chunk[chunk["valide"]]
-        for chunk in gros_dataset.iter_dataframes(chunk_size=50_000, order_by="id")
+        chunk[chunk["valid"]]
+        for chunk in big_dataset.iter_dataframes(chunk_size=50_000, order_by="id")
     )
-    resultat.write_dataframes(chunks, mode="replace")
+    result.write_dataframes(chunks, mode="replace")
 ```
 
 Pass `order_by=` for a deterministic page split. The transforms layer is
