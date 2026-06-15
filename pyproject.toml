@@ -1,6 +1,6 @@
 [project]
 name = "gwenlake"
-version = "0.6.0"
+version = "0.7.0"
 description = "Gwenlake Python Client"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -9,6 +9,12 @@ dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
+]
+
+[project.optional-dependencies]
+transforms = [
+    "pandas>=2.0",
+    "pyarrow>=14.0",
 ]
 
 [project.scripts]
