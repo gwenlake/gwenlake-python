@@ -16,13 +16,6 @@ Or install the latest development version straight from GitHub:
 pip install -U git+https://github.com/gwenlake/gwenlake-python
 ```
 
-The [Transforms](#transforms) layer needs pandas (and pyarrow for parquet);
-install it with the optional `transforms` extra:
-
-```sh
-pip install -U "gwenlake[transforms]"
-```
-
 ## Authentication
 
 The client authenticates with a Bearer token, resolved in this order:
@@ -37,16 +30,16 @@ export GWENLAKE_API_KEY='sk-...'
 ```
 
 ```python
-import gwenlake
+from gwenlake import Gwenlake
 
 # uses GWENLAKE_API_KEY, or the default ~/.gwenlake/credentials profile
-client = gwenlake.Gwenlake()
+client = Gwenlake()
 
 # or pass the key explicitly
-client = gwenlake.Gwenlake(api_key="sk-...")
+client = Gwenlake(api_key="sk-...")
 
 # or pick a profile from ~/.gwenlake/credentials
-client = gwenlake.Gwenlake(profile="myteam")
+client = Gwenlake(profile="myteam")
 ```
 
 The `~/.gwenlake/credentials` file is an INI file with one section per profile,
@@ -118,7 +111,6 @@ Pass a `connection_id` to run the statement against a connection's native engine
 A Palantir Foundry-style transforms layer (`gwenlake.transforms`) lets you write
 dataset-to-dataset transformations as decorated functions. Datasets are
 addressed as `"<project_alias>.<dataset_alias>"` — the same handle used in SQL.
-Requires the `transforms` extra (see [Installation](#installation)).
 
 `transform_df` — the function receives each `Input` as a `pandas.DataFrame` and
 **returns** the DataFrame to write to the (single) `Output`. The result is
@@ -128,15 +120,15 @@ written automatically (snapshot/replace by default):
 from gwenlake.transforms import transform_df, Input, Output
 
 @transform_df(
-    raw_users=Input("Project_A.users"),
-    clean_users=Output("Project_A.users_filtered"),
+    raw_data=Input("Project_A.users"),
+    processed_data=Output("Project_A.users_filtered"),
 )
-def clean_adults(raw_users):
-    df = raw_users[raw_users["age"] >= 18].copy()
+def process(raw_data):
+    df = raw_data[raw_data["age"] >= 18].copy()
     df["name_upper"] = df["name"].str.upper()
     return df
 
-clean_adults(client)   # reads, computes, writes
+process(client)   # reads, computes, writes
 ```
 
 `transform` — the lower-level form: the function receives `TransformInput` /
@@ -193,10 +185,10 @@ Every resource is also available on `AsyncGwenlake`:
 
 ```python
 import asyncio
-import gwenlake
+from gwenlake import AsyncGwenlake
 
 async def main():
-    client = gwenlake.AsyncGwenlake()
+    client = AsyncGwenlake()
     print(await client.projects.list())
 
 asyncio.run(main())

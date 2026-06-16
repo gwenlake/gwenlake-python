@@ -31,8 +31,7 @@ handle DuckDB uses in ``FROM '<project>.<dataset>'``. A bare string with no dot
 is treated as a dataset alias (searched across datasets) or, failing that, as a
 dataset id.
 
-``pandas`` (and ``pyarrow`` for parquet) are optional dependencies, imported
-lazily so the base SDK stays light. Install with ``pip install gwenlake[transforms]``.
+``pandas`` and ``pyarrow`` are included in the base install.
 """
 
 import functools
@@ -100,7 +99,7 @@ def _require_pandas():
         import pandas as pd
     except ImportError as exc:  # pragma: no cover
         raise GwenlakeException(
-            "pandas is required for transforms; install with: pip install gwenlake[transforms]"
+            "pandas is required for transforms; install with: pip install gwenlake"
         ) from exc
     return pd
 
