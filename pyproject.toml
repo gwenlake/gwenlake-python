@@ -1,12 +1,14 @@
 [project]
 name = "gwenlake"
-version = "0.7.1"
+version = "0.7.2"
 description = "Gwenlake Python Client"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1.7",
+    "fastparquet>=2026.5.0",
     "httpx>=0.28.1",
+    "pandas>=3.0.3",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
 ]
