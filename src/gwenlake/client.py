@@ -50,12 +50,14 @@ class BaseApiClient:
         self,
         *,
         base_url: str,
-        credentials: Credentials,
+        credentials: Optional[Credentials] = None,
+        user_token: Optional[str] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         timeout: int = DEFAULT_TIMEOUT,
     ):
         self._base_url = base_url
         self._credentials = credentials
+        self._user_token = user_token
         self._max_retries = max_retries
         self._timeout = timeout
 
@@ -69,11 +71,12 @@ class BaseApiClient:
         return url
 
     def _create_headers(self, request_info: RequestOptions) -> Dict[str, Any]:
-        headers = {
-            "User-Agent": f"gwenlake/{__version__}",
-            "Authorization": "Bearer " + self._credentials.get_token().access_token,
-        }
-        
+        headers = {"User-Agent": f"gwenlake/{__version__}"}
+        if self._user_token:
+            headers["x-user"] = self._user_token
+        elif self._credentials is not None:
+            headers["Authorization"] = "Bearer " + self._credentials.get_token().access_token
+
         if request_info.headers:
             for key, value in request_info.headers.items():
                 if value is None:
@@ -106,17 +109,19 @@ class ApiClient(BaseApiClient):
         self,
         *,
         base_url: str,
-        credentials: Credentials,
+        credentials: Optional[Credentials] = None,
+        user_token: Optional[str] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         timeout: int = DEFAULT_TIMEOUT,
     ):
         super().__init__(
             base_url=base_url,
             credentials=credentials,
+            user_token=user_token,
             max_retries=max_retries,
             timeout=timeout
         )
-        transport = httpx.HTTPTransport(retries=self._max_retries) 
+        transport = httpx.HTTPTransport(retries=self._max_retries)
         self._client = httpx.Client(
             base_url=base_url,
             transport=transport, 
@@ -143,13 +148,15 @@ class AsyncApiClient(BaseApiClient):
         self,
         *,
         base_url: str,
-        credentials: Credentials,
+        credentials: Optional[Credentials] = None,
+        user_token: Optional[str] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         timeout: int = DEFAULT_TIMEOUT,
     ):
         super().__init__(
             base_url=base_url,
             credentials=credentials,
+            user_token=user_token,
             max_retries=max_retries,
             timeout=timeout
         )
@@ -233,6 +240,17 @@ def _resolve_base_url(base_url: Optional[str] = None) -> str:
     return base_url or os.environ.get("GWENLAKE_BASE_URL") or DEFAULT_BASE_URL
 
 
+def _resolve_user_token(user_token: Optional[str] = None) -> Optional[str]:
+    """A pre-validated `x-user` identity for internal, in-cluster callers.
+
+    When set (constructor arg or `GWENLAKE_USER_TOKEN`), the client talks to the
+    service directly as this identity — no api_key/credentials required. The
+    catalog build runner injects it so transform code can call the API as the
+    user who triggered the build without minting a real API key.
+    """
+    return user_token or os.environ.get("GWENLAKE_USER_TOKEN")
+
+
 class Gwenlake:
     """Unified Gwenlake client exposing every API resource through a single
     authenticated transport (inference + catalog via one gateway)."""
@@ -251,15 +269,22 @@ class Gwenlake:
         api_key: Optional[str] = None,
         credentials: Optional[Credentials] = None,
         profile: Optional[str] = None,
+        user_token: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: Optional[float] = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        self._credentials = _resolve_credentials(api_key=api_key, credentials=credentials, profile=profile)
+        # Internal x-user mode (in-cluster) bypasses api-key/OAuth resolution.
+        self._user_token = _resolve_user_token(user_token)
+        self._credentials = (
+            None if self._user_token
+            else _resolve_credentials(api_key=api_key, credentials=credentials, profile=profile)
+        )
         self._base_url = _resolve_base_url(base_url)
         self._client = ApiClient(
             base_url=self._base_url,
             credentials=self._credentials,
+            user_token=self._user_token,
             max_retries=max_retries,
             timeout=timeout,
         )
@@ -290,15 +315,22 @@ class AsyncGwenlake:
         api_key: Optional[str] = None,
         credentials: Optional[Credentials] = None,
         profile: Optional[str] = None,
+        user_token: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: Optional[float] = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        self._credentials = _resolve_credentials(api_key=api_key, credentials=credentials, profile=profile)
+        # Internal x-user mode (in-cluster) bypasses api-key/OAuth resolution.
+        self._user_token = _resolve_user_token(user_token)
+        self._credentials = (
+            None if self._user_token
+            else _resolve_credentials(api_key=api_key, credentials=credentials, profile=profile)
+        )
         self._base_url = _resolve_base_url(base_url)
         self._client = AsyncApiClient(
             base_url=self._base_url,
             credentials=self._credentials,
+            user_token=self._user_token,
             max_retries=max_retries,
             timeout=timeout,
         )
