@@ -77,11 +77,17 @@ class Files:
         *,
         path: Optional[str] = None,
         filename: Optional[str] = None,
+        mode: Optional[str] = None,
+        branch: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # `mode` (APPEND/SNAPSHOT/…) and `branch` steer Iceberg-dataset writes;
+        # they are ignored by files datasets.
+        params = {k: v for k, v in {"mode": mode, "branch": branch}.items() if v}
         response = self._client.send(
             RequestOptions(
                 method="POST",
                 url=_upload_url(dataset_id, path),
+                params=params,
                 files=_multipart(file, filename),
                 headers={"Accept": "application/json"},
             ),
@@ -147,11 +153,17 @@ class AsyncFiles:
         *,
         path: Optional[str] = None,
         filename: Optional[str] = None,
+        mode: Optional[str] = None,
+        branch: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # `mode` (APPEND/SNAPSHOT/…) and `branch` steer Iceberg-dataset writes;
+        # they are ignored by files datasets.
+        params = {k: v for k, v in {"mode": mode, "branch": branch}.items() if v}
         response = await self._client.send(
             RequestOptions(
                 method="POST",
                 url=_upload_url(dataset_id, path),
+                params=params,
                 files=_multipart(file, filename),
                 headers={"Accept": "application/json"},
             ),

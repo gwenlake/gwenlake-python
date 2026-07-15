@@ -104,9 +104,34 @@ def _require_pandas():
     return pd
 
 
+def _catalog_branch() -> Optional[str]:
+    """The Iceberg data branch a build targets, from the `CATALOG_BRANCH` env the
+    build engine sets. ``None`` on trunk (unset / "main"), so reads and writes
+    stay on the default version outside a branch build."""
+    branch = os.environ.get("CATALOG_BRANCH", "").strip()
+    return branch if branch and branch != "main" else None
+
+
+def _is_iceberg(client: Any, dataset_id: str) -> bool:
+    """Whether the dataset is Iceberg-backed (so writes go through the table, not
+    the raw file store). Best-effort: any lookup failure assumes files."""
+    try:
+        ds = client.datasets.get(dataset_id)
+        info = ds if isinstance(ds, dict) else getattr(ds, "__dict__", {})
+        return (info or {}).get("type") == "iceberg"
+    except Exception:
+        return False
+
+
 def _sql_table(client: Any, ref: str) -> str:
-    """The '<project>.<dataset>' table handle DuckDB uses in FROM, from a ref."""
-    return ref if "." in ref else _ref_to_sql_table(client, ref)
+    """The '<project>.<dataset>' table handle DuckDB uses in FROM, from a ref.
+
+    On a branch build (`CATALOG_BRANCH` set), the `:branch` suffix is appended so
+    the read resolves that Iceberg branch — the same `project.dataset:branch`
+    syntax `/sql` understands. Non-Iceberg inputs ignore it server-side."""
+    handle = ref if "." in ref else _ref_to_sql_table(client, ref)
+    branch = _catalog_branch()
+    return f"{handle}:{branch}" if branch else handle
 
 
 def _run_rows(client: Any, statement: str) -> List[Dict[str, Any]]:
@@ -281,10 +306,21 @@ class FileSystem:
         """Download a file's raw bytes."""
         return self._client.files.download(self._dataset_id, filepath)
 
-    def write(self, filepath: str, data: bytes) -> Dict[str, Any]:
-        """Upload raw bytes to ``filepath`` within the dataset."""
+    def write(
+        self,
+        filepath: str,
+        data: bytes,
+        *,
+        mode: Optional[str] = None,
+        branch: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upload raw bytes to ``filepath`` within the dataset. ``mode``
+        (APPEND/SNAPSHOT) and ``branch`` steer Iceberg writes; files datasets
+        ignore them."""
         path, filename = _split_path(filepath)
-        return self._client.files.upload(self._dataset_id, data, path=path, filename=filename)
+        return self._client.files.upload(
+            self._dataset_id, data, path=path, filename=filename, mode=mode, branch=branch
+        )
 
     def delete(self, filepath: str) -> bool:
         """Delete a single file from the dataset."""
@@ -391,6 +427,14 @@ class TransformOutput:
         if filename == "data.parquet" and ext != "parquet":
             filename = f"data.{ext}"
         fs = self.filesystem()
+        branch = _catalog_branch()
+        if _is_iceberg(self._client, self.dataset_id):
+            # The server writes into the Iceberg table on `branch`: SNAPSHOT
+            # overwrites it (replace), APPEND adds to it. Never touch the table's
+            # physical files directly.
+            wire_mode = "SNAPSHOT" if mode == "replace" else "APPEND"
+            return fs.write(filename, data, mode=wire_mode, branch=branch)
+        # Files dataset: branchless raw file store; replace clears it first.
         if mode == "replace":
             fs.clear()
         return fs.write(filename, data)
@@ -411,12 +455,21 @@ class TransformOutput:
         if mode not in ("replace", "append"):
             raise ValueError(f"Unsupported mode '{mode}' (use 'replace' or 'append')")
         fs = self.filesystem()
-        if mode == "replace":
+        branch = _catalog_branch()
+        iceberg = _is_iceberg(self._client, self.dataset_id)
+        # Files dataset: clear once up front. Iceberg: the first chunk of a
+        # replace is a SNAPSHOT (overwrites the branch) and the rest APPEND.
+        if mode == "replace" and not iceberg:
             fs.clear()
         results: List[Dict[str, Any]] = []
         for i, df in enumerate(dfs):
             data, ext = _serialize_df(df, format)
-            results.append(fs.write(f"{prefix}-{i:05d}.{ext}", data))
+            name = f"{prefix}-{i:05d}.{ext}"
+            if iceberg:
+                wire_mode = "SNAPSHOT" if (mode == "replace" and i == 0) else "APPEND"
+                results.append(fs.write(name, data, mode=wire_mode, branch=branch))
+            else:
+                results.append(fs.write(name, data))
         return results
 
     def filesystem(self) -> FileSystem:
