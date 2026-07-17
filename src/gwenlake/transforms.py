@@ -369,7 +369,7 @@ class TransformInput:
             self._dataset_id = _resolve_dataset_id(self._client, self.ref)
         return self._dataset_id
 
-    def dataframe(self, *, chunk_size: Optional[int] = None, order_by: Optional[str] = None):
+    def dataframe(self, *, chunk_size: Optional[int] = DEFAULT_CHUNK_SIZE, order_by: Optional[str] = None):
         """Read the whole dataset into a ``pandas.DataFrame``.
 
         With ``chunk_size`` set, pages through with ``LIMIT/OFFSET`` and
