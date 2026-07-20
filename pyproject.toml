@@ -1,6 +1,6 @@
 [project]
 name = "gwenlake"
-version = "0.8.1"
+version = "0.8.2"
 description = "Gwenlake Python Client"
 readme = "README.md"
 requires-python = ">=3.12"

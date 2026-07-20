@@ -40,6 +40,15 @@ class RequestOptions(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_RETRYABLE_TRANSPORT_ERRORS = (
+    httpx.RemoteProtocolError,  # server closed cleanly (FIN) before responding
+    httpx.ReadError,            # connection reset (RST) while awaiting the response
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+)
+
+
 _HttpxClientT = TypeVar("_HttpxClientT", bound=Union[httpx.Client, httpx.AsyncClient])
 
 class BaseApiClient:
@@ -132,13 +141,28 @@ class ApiClient(BaseApiClient):
 
     def send(self, request_info: RequestOptions) -> Any:
         request = self._build_request(request_info)
-        return self._client.send(request=request, stream=False)
+        attempts = self._max_retries + 1 if request.method in _IDEMPOTENT_METHODS else 1
+        for attempt in range(attempts):
+            try:
+                return self._client.send(request=request, stream=False)
+            except _RETRYABLE_TRANSPORT_ERRORS:
+                if attempt == attempts - 1:
+                    raise
 
     def stream(self, request_info: RequestOptions) -> Iterator[str]:
         request = self._build_request(request_info)
-        with self._client.send(request=request, stream=True) as response:
-            for line in response.iter_lines():
-                yield line
+        attempts = self._max_retries + 1 if request.method in _IDEMPOTENT_METHODS else 1
+        for attempt in range(attempts):
+            yielded_any = False
+            try:
+                with self._client.send(request=request, stream=True) as response:
+                    for line in response.iter_lines():
+                        yielded_any = True
+                        yield line
+                return
+            except _RETRYABLE_TRANSPORT_ERRORS:
+                if yielded_any or attempt == attempts - 1:
+                    raise
 
 class AsyncApiClient(BaseApiClient):
 
@@ -160,10 +184,10 @@ class AsyncApiClient(BaseApiClient):
             max_retries=max_retries,
             timeout=timeout
         )
-        transport = httpx.HTTPTransport(retries=self._max_retries) 
+        transport = httpx.AsyncHTTPTransport(retries=self._max_retries)
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            transport=transport, 
+            transport=transport,
             timeout=self._timeout,
             follow_redirects=True,
             limits=DEFAULT_CONNECTION_LIMITS,
@@ -171,13 +195,28 @@ class AsyncApiClient(BaseApiClient):
 
     async def send(self, request_info: RequestOptions) -> Any:
         request = self._build_request(request_info)
-        return await self._client.send(request=request, stream=False)
+        attempts = self._max_retries + 1 if request.method in _IDEMPOTENT_METHODS else 1
+        for attempt in range(attempts):
+            try:
+                return await self._client.send(request=request, stream=False)
+            except _RETRYABLE_TRANSPORT_ERRORS:
+                if attempt == attempts - 1:
+                    raise
 
     async def stream(self, request_info: RequestOptions) -> AsyncIterator[str]:
         request = self._build_request(request_info)
-        async with self._client.send(request=request, stream=True) as response:
-            async for line in response.iter_lines():
-                yield line
+        attempts = self._max_retries + 1 if request.method in _IDEMPOTENT_METHODS else 1
+        for attempt in range(attempts):
+            yielded_any = False
+            try:
+                async with self._client.send(request=request, stream=True) as response:
+                    async for line in response.iter_lines():
+                        yielded_any = True
+                        yield line
+                return
+            except _RETRYABLE_TRANSPORT_ERRORS:
+                if yielded_any or attempt == attempts - 1:
+                    raise
 
 
 # ---------------------------------------------------------------------------
