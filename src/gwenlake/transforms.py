@@ -16,7 +16,7 @@ Gwenlake client:
 
     ma_transformation(client)   # reads, computes, writes
 
-Two decorators are provided:
+Three decorators are provided:
 
 * ``transform_df`` — the decorated function receives each ``Input`` as a
   ``pandas.DataFrame`` (matched by keyword name) and **returns** a single
@@ -25,6 +25,15 @@ Two decorators are provided:
   and ``TransformOutput`` objects (matched by keyword name). Call
   ``.dataframe()`` to read, ``.write_dataframe(df)`` to write, and
   ``.filesystem()`` for raw file access (images, PDFs, anything non-tabular).
+* ``train`` — produces a **model** instead of a dataset: its ``Output`` names a
+  model, and the function writes the fitted artifacts under ``output.path``
+  (the model's directory in the repository checkout). The build engine commits
+  them and pins that commit as the model's version.
+
+A third reference, ``Model("<project>.<model>")``, binds a model a transform
+*loads* — conventionally as ``model=Model(...)``. It arrives as a
+``TransformModel`` whose ``path`` points at the artifacts on disk. Models live
+in the same repository as the code that trains or predicts with them.
 
 Datasets are addressed as ``"<project_alias>.<dataset_alias>"`` — the same
 handle DuckDB uses in ``FROM '<project>.<dataset>'``. A bare string with no dot
@@ -68,7 +77,17 @@ class Input(_DatasetRef):
 
 
 class Output(_DatasetRef):
-    """References the output dataset a transform writes to."""
+    """References what a transform produces: the output dataset of a
+    ``transform``/``transform_df``, or the **model** of a ``train``."""
+
+
+class Model(_DatasetRef):
+    """References a model the transform loads, e.g. ``Model("crm.churn")``.
+
+    Conventionally bound to the ``model=`` keyword. The decorated function
+    receives a :class:`TransformModel` — use ``model.path`` to read the
+    artifacts, which live in the same repository as this code.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -477,16 +496,146 @@ class TransformOutput:
 
 
 # ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+def _catalog_models() -> Dict[str, Dict[str, Any]]:
+    """The models the build engine resolved for this run, keyed by alias
+    (`CATALOG_MODELS`): ``{alias: {model_id, path, parameters, version}}`` where
+    ``path`` is the model's directory **in this checkout**. Empty outside a
+    build."""
+    import json
+
+    raw = os.environ.get("CATALOG_MODELS", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _resolve_model(client: Any, ref: str) -> Dict[str, Any]:
+    """Resolve ``"<project_alias>.<model_alias>"`` (or a bare alias / id) to the
+    model row, using the catalog's ``/models`` endpoint."""
+    alias = ref.split(".", 1)[1] if "." in ref else ref
+    project_alias = ref.split(".", 1)[0] if "." in ref else None
+
+    models = _catalog_get(client, "/models")
+    if project_alias:
+        project = next((p for p in client.projects.list() if p.get("alias") == project_alias), None)
+        if project is None:
+            raise GwenlakeException(f"No project with alias '{project_alias}' (in ref '{ref}')")
+        models = [m for m in models if m.get("project_id") == project["id"]]
+    match = next((m for m in models if m.get("alias") == alias or m.get("id") == ref), None)
+    if match is None:
+        raise GwenlakeException(
+            f"No model '{ref}' in the catalog. Note that the catalog's /models "
+            "endpoints are only reachable from a build (the client's base URL "
+            "must be the api-catalog service): on the public gateway /models is "
+            "the inference model list."
+        )
+    return match
+
+
+def _catalog_get(client: Any, url: str) -> List[Dict[str, Any]]:
+    from gwenlake.client import RequestOptions
+
+    response = client._client.send(RequestOptions(method="GET", url=url))
+    response.raise_for_status()
+    return response.json().get("data", [])
+
+
+class TransformModel:
+    """A model bound to a transform — its artifacts on disk, plus its card.
+
+    Inside a build the engine has already checked out the repository and told
+    us where the model lives (`CATALOG_MODELS`), so ``path`` is a real local
+    directory and **no API call is needed** — which is what makes this usable
+    today: the catalog's ``/models`` endpoints are not routed through the
+    public gateway (that path serves the inference model list), so ``info()``
+    and ``update()`` only work when the client points at api-catalog, as it
+    does inside a build.
+    """
+
+    def __init__(self, client: Any, ref: str):
+        self._client = client
+        self.ref = ref
+        self._info: Optional[Dict[str, Any]] = None
+        self._env = _catalog_models().get(ref.split(".", 1)[-1]) or {}
+
+    # -- identity / card ---------------------------------------------------
+
+    @property
+    def id(self) -> str:
+        if self._env.get("model_id"):
+            return self._env["model_id"]
+        return self.info()["id"]
+
+    @property
+    def path(self) -> str:
+        """Local directory holding the model's files."""
+        if self._env.get("path"):
+            return self._env["path"]
+        return self.info().get("path") or "."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        if self._env:
+            return dict(self._env.get("parameters") or {})
+        return dict(self.info().get("parameters") or {})
+
+    @property
+    def version(self) -> Optional[str]:
+        if self._env:
+            return self._env.get("version")
+        return self.info().get("version")
+
+    def info(self) -> Dict[str, Any]:
+        """The model row from the catalog (cached)."""
+        if self._info is None:
+            self._info = _resolve_model(self._client, self.ref)
+        return self._info
+
+    # -- writing back ------------------------------------------------------
+
+    def update(self, **fields: Any) -> Dict[str, Any]:
+        """PATCH the model card (``metrics=...``, ``version=...``, ``parameters=...``).
+
+        The artifacts themselves are committed by the build engine — a training
+        run only has to write them under :attr:`path`.
+        """
+        from gwenlake.client import RequestOptions
+
+        response = self._client._client.send(RequestOptions(
+            method="PATCH", url=f"/models/{self.id}",
+            headers={"Content-Type": "application/json"}, json_data=fields,
+        ))
+        response.raise_for_status()
+        self._info = response.json()
+        return self._info
+
+    def file(self, *parts: str) -> str:
+        """``os.path.join(model.path, *parts)`` — the usual way to address an
+        artifact (``model.file("model.pkl")``)."""
+        return os.path.join(self.path, *parts)
+
+
+# ---------------------------------------------------------------------------
 # Decorators
 # ---------------------------------------------------------------------------
 
-def _split_bindings(bindings: Dict[str, _DatasetRef]) -> Tuple[Dict[str, Input], Dict[str, Output]]:
+def _split_bindings(
+    bindings: Dict[str, _DatasetRef],
+) -> Tuple[Dict[str, Input], Dict[str, Output], Dict[str, Model]]:
     inputs = {k: v for k, v in bindings.items() if isinstance(v, Input)}
     outputs = {k: v for k, v in bindings.items() if isinstance(v, Output)}
+    models = {k: v for k, v in bindings.items() if isinstance(v, Model)}
     unknown = {k: v for k, v in bindings.items() if not isinstance(v, _DatasetRef)}
     if unknown:
-        raise TypeError(f"transform bindings must be Input/Output, got: {list(unknown)}")
-    return inputs, outputs
+        raise TypeError(f"transform bindings must be Input/Model/Output, got: {list(unknown)}")
+    return inputs, outputs, models
 
 
 def transform_df(**bindings: _DatasetRef) -> Callable:
@@ -496,7 +645,7 @@ def transform_df(**bindings: _DatasetRef) -> Callable:
     The decorated function is called as ``fn(client)`` and runs eagerly: it
     reads every input, calls the body, and writes the returned DataFrame.
     """
-    inputs, outputs = _split_bindings(bindings)
+    inputs, outputs, models = _split_bindings(bindings)
     if len(outputs) != 1:
         raise TypeError(f"transform_df expects exactly one Output, got {len(outputs)}")
 
@@ -509,6 +658,8 @@ def transform_df(**bindings: _DatasetRef) -> Callable:
             for name in params:
                 if name in inputs:
                     call_kwargs[name] = TransformInput(client, inputs[name].ref).dataframe()
+                elif name in models:
+                    call_kwargs[name] = TransformModel(client, models[name].ref)
                 elif name in outputs:
                     # Tolerated for parity with the user's snippet; the return
                     # value is what actually gets written.
@@ -521,6 +672,7 @@ def transform_df(**bindings: _DatasetRef) -> Callable:
 
         wrapper.inputs = inputs
         wrapper.outputs = outputs
+        wrapper.models = models
         return wrapper
 
     return decorator
@@ -534,7 +686,7 @@ def transform(**bindings: _DatasetRef) -> Callable:
 
     The decorated function is called as ``fn(client)`` and runs eagerly.
     """
-    inputs, outputs = _split_bindings(bindings)
+    inputs, outputs, models = _split_bindings(bindings)
 
     def decorator(fn: Callable) -> Callable:
         params = inspect.signature(fn).parameters
@@ -545,12 +697,67 @@ def transform(**bindings: _DatasetRef) -> Callable:
             for name in params:
                 if name in inputs:
                     call_kwargs[name] = TransformInput(client, inputs[name].ref)
+                elif name in models:
+                    call_kwargs[name] = TransformModel(client, models[name].ref)
                 elif name in outputs:
                     call_kwargs[name] = TransformOutput(client, outputs[name].ref)
             return fn(**call_kwargs)
 
         wrapper.inputs = inputs
         wrapper.outputs = outputs
+        wrapper.models = models
+        return wrapper
+
+    return decorator
+
+
+def train(**bindings: _DatasetRef) -> Callable:
+    """Decorate a function that **trains a model**: its ``Output`` is a model,
+    not a dataset.
+
+        @train(
+            training_set=Input("crm.churn-training"),
+            output=Output("crm.churn"),
+        )
+        def fit(training_set, output):
+            clf = ...                                   # training_set is a DataFrame
+            joblib.dump(clf, output.file("model.pkl"))   # write under the model's dir
+            return {"auc": 0.91}                         # -> stored as the model's metrics
+
+    ``Input`` bindings arrive as ``pandas.DataFrame`` (as in ``transform_df``);
+    ``Model`` bindings and the ``Output`` arrive as :class:`TransformModel`, so
+    ``output.path`` is the model's directory **in this checkout** — the build
+    engine commits whatever the function writes there and pins that commit as
+    the model's version. A returned dict is stored as the model's ``metrics``.
+
+    A ``Model`` binding alongside the ``Output`` expresses fine-tuning: the
+    lineage then reads model -> train -> model.
+    """
+    inputs, outputs, models = _split_bindings(bindings)
+    if len(outputs) != 1:
+        raise TypeError(f"train expects exactly one Output (the model), got {len(outputs)}")
+
+    def decorator(fn: Callable) -> Callable:
+        params = inspect.signature(fn).parameters
+
+        @functools.wraps(fn)
+        def wrapper(client: Any) -> Any:
+            call_kwargs: Dict[str, Any] = {}
+            for name in params:
+                if name in inputs:
+                    call_kwargs[name] = TransformInput(client, inputs[name].ref).dataframe()
+                elif name in models:
+                    call_kwargs[name] = TransformModel(client, models[name].ref)
+                elif name in outputs:
+                    call_kwargs[name] = TransformModel(client, outputs[name].ref)
+            result = fn(**call_kwargs)
+            if isinstance(result, dict):
+                TransformModel(client, next(iter(outputs.values())).ref).update(metrics=result)
+            return result
+
+        wrapper.inputs = inputs
+        wrapper.outputs = outputs
+        wrapper.models = models
         return wrapper
 
     return decorator
