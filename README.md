@@ -109,8 +109,9 @@ Pass a `connection_id` to run the statement against a connection's native engine
 ## Transforms
 
 A Palantir Foundry-style transforms layer (`gwenlake.transforms`) lets you write
-dataset-to-dataset transformations as decorated functions. Datasets are
-addressed as `"<project_alias>.<dataset_alias>"` — the same handle used in SQL.
+dataset-to-dataset transformations as decorated functions. Datasets (and
+models) are addressed as `"<project_alias>.<alias>"` — the same handle used in
+SQL.
 
 `transform_df` — the function receives each `Input` as a `pandas.DataFrame` and
 **returns** the DataFrame to write to the (single) `Output`. The result is
@@ -158,6 +159,47 @@ def process_files(images, thumbnails):
         with dst.open(f"copy/{entry['filename']}", "wb") as f:
             f.write(data)
 ```
+
+### Models
+
+A **model** is a catalog resource whose artifacts live in the git repository the
+code lives in (`/models` in the catalog). `train` produces one, and `Model(...)`
+binds one a transform loads — conventionally as `model=`:
+
+```python
+import joblib
+from gwenlake.transforms import train, transform_df, Input, Model, Output
+
+@train(
+    training_set=Input("Project_A.churn_training"),
+    output=Output("Project_A.churn"),          # an Output of @train is a MODEL
+)
+def fit(training_set, output):
+    clf = fit_classifier(training_set)         # training_set is a DataFrame
+    joblib.dump(clf, output.file("model.pkl")) # write under the model's directory
+    return {"auc": 0.91}                       # returned dict -> the model's metrics
+
+@transform_df(
+    customers=Input("Project_A.customers"),
+    model=Model("Project_A.churn"),            # a model this transform loads
+    output=Output("Project_A.churn_scores"),
+)
+def predict(customers, model):
+    clf = joblib.load(model.file("model.pkl"))
+    return customers.assign(churn=clf.predict(customers))
+```
+
+Models are a catalog resource served by api-catalog. Its `/models` endpoints
+are **not** routed through the public gateway today (that path serves the
+inference model list), so `model.info()` / `model.update()` work from inside a
+build — where the client already points at api-catalog — but not against
+`api.gwenlake.com`. `model.path` never needs an API call during a build.
+
+`output.path` (and `model.path`) is the model's directory **in the checkout**:
+during a build the engine sets it, commits whatever the training run wrote
+there, and pins that commit as the model's version. `model.parameters`,
+`model.version` and `model.update(metrics=..., version=...)` cover the model
+card. Lineage follows: `datasets -> train -> model -> transform -> dataset`.
 
 **Large datasets** — page through with `LIMIT/OFFSET` instead of loading
 everything at once. `iter_dataframes()` yields `pandas.DataFrame` chunks and
