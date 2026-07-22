@@ -26,7 +26,7 @@ No test suite, linter, or formatter config in the repo. Releases publish to PyPI
 
 ### Flat module layout
 
-Everything lives directly under `src/gwenlake/` — there are **no `auth/`, `inference/`, or `factory/` subpackages** (they were flattened). One module per concern: `client.py`, `credentials.py`, `flow.py`, `token.py`, `models.py`, `chat.py`, `embeddings.py`, `datasets.py`, `files.py`, `projects.py`, plus `types.py`, `constants.py`, `exceptions.py`, `cli.py`.
+Everything lives directly under `src/gwenlake/` — there are **no `auth/`, `inference/`, or `factory/` subpackages** (they were flattened). One module per concern: `client.py`, `credentials.py`, `flow.py`, `token.py`, `models.py`, `chat.py`, `embeddings.py`, `datasets.py`, `files.py`, `projects.py`, `transforms.py`, plus `types.py`, `constants.py`, `exceptions.py`, `cli.py`. (Note `models.py` is the **inference** models resource; catalog ML models are reached through `transforms.py`.)
 
 ### Single gateway, one base URL
 
@@ -58,6 +58,14 @@ Resource request flow:
 Resources wired onto the client: `models`, `chat`, `embeddings`, `datasets`, `files`, `projects`, `statements`. Each is a thin class holding `_client`, with a **sync + `Async` pair** of identical bodies (`Chat`/`AsyncChat`, `Datasets`/`AsyncDatasets`, …). When you change one method, update its async twin. Catalog list methods return `.json()["data"]`; inference chat/models return raw dicts, `embeddings.create` returns a typed `EmbeddingResponse` (batched in chunks of `BATCH_SIZE=100`). `types.py` holds the pydantic response models — the layer is only partially typed.
 
 File ops (`files.py`) map to the catalog's S3-backed routes: `list(dataset_id, path=)`, `download(dataset_id, filepath)→bytes`, `upload(dataset_id, file, path=, filename=)` (multipart, accepts a local path or raw bytes), `presigned_url(...)`, `delete(...)`. There is no `/content` or `/upload` suffix — uploads POST to `/datasets/{id}/files[/{path}]`. `statements.create(statement=, connection_id=, format="json", ...)` runs SQL via `POST /sql/statements`; without `connection_id` it's dataset mode (`FROM '<project_alias>.<dataset_alias>'`, DuckDB) and `format="json"` returns rows under `data` — not every dataset is queryable (non-tabular ones return 403 "Cannot query this dataset").
+
+### Transforms & models (`transforms.py`)
+
+A Foundry-style layer on top of the resources — **not** a client resource: decorators that read/compute/write. Three of them, all called as `fn(client)`: `transform_df` (Inputs arrive as DataFrames, the returned DataFrame is written to the single `Output`), `transform` (the body gets `TransformInput`/`TransformOutput` and does its own IO, incl. `.filesystem()` for non-tabular data) and `train` (its `Output` is a **model**, not a dataset).
+
+Three reference markers, matched to the function's parameters **by keyword name**: `Input("<project>.<dataset>")`, `Output(...)` (a dataset for `transform_df`/`transform`, a model for `train`) and `Model("<project>.<model>")` — a model the code loads, conventionally bound as `model=`. `Model`/`train`-`Output` bindings arrive as a `TransformModel`: `.path` is the model's directory **in the repository checkout**, `.file(...)` joins into it, `.parameters`/`.version` come from the model card, `.update(metrics=...)` PATCHes it. A dict returned by a `@train` body is stored as the model's `metrics`.
+
+Inside a catalog build the engine exports `CATALOG_MODELS` (alias → `{model_id, path, parameters, version}`) so `.path` resolves with no API call, and it **commits whatever the training run wrote under that path**, pinning the commit as the model's version — which is why a model and the code that trains or predicts with it must live in the same repository. Outside a build, `.path` falls back to the model's declared `path` relative to the cwd. The catalog scanner reads these same decorators to derive lineage (`datasets -> train -> model -> transform -> dataset`), so the marker names are part of the contract with api-catalog: renaming one breaks the scan.
 
 ### CLI (`cli.py`)
 
