@@ -5,7 +5,7 @@ Uses the default credentials (GWENLAKE_API_KEY env var or the ``default`` profil
 """
 
 import gwenlake
-from gwenlake.transforms import transform_df, transform, Input, Output
+from gwenlake.transforms import transform_df, transform, train, Input, Model, Output
 
 client = gwenlake.Gwenlake()  # default credentials
 
@@ -74,3 +74,35 @@ if __name__ == "__main__":
     dedupe_users(client)
     process_files(client)
     transform_in_chunks(client)
+
+
+# 4) train: the Output is a MODEL, not a dataset. The body writes the fitted
+#    artifacts under `output.path` (the model's directory in the repository
+#    checkout); the build engine commits them and pins that commit as the
+#    model's version. A returned dict becomes the model's metrics.
+@train(
+    training_set=Input("Project_A.churn_training"),
+    output=Output("Project_A.churn"),
+)
+def fit_churn(training_set, output):
+    import joblib
+    from sklearn.linear_model import LogisticRegression
+
+    features = training_set.drop(columns=["churn"])
+    clf = LogisticRegression().fit(features, training_set["churn"])
+    joblib.dump(clf, output.file("model.pkl"))
+    return {"n_samples": len(training_set)}
+
+
+# 5) A model a transform loads, bound as `model=`. Model and code live in the
+#    same repository, so `model.path` is a plain directory of this checkout.
+@transform_df(
+    customers=Input("Project_A.customers"),
+    model=Model("Project_A.churn"),
+    output=Output("Project_A.churn_scores"),
+)
+def predict_churn(customers, model):
+    import joblib
+
+    clf = joblib.load(model.file("model.pkl"))
+    return customers.assign(churn=clf.predict(customers))
