@@ -31,6 +31,15 @@ handle DuckDB uses in ``FROM '<project>.<dataset>'``. A bare string with no dot
 is treated as a dataset alias (searched across datasets) or, failing that, as a
 dataset id.
 
+Reads move over Arrow rather than JSON, and an ``Input`` can restrict what it
+pulls back — decisive on wide tables, where a transform typically wants a
+handful of a few hundred columns::
+
+    @transform_df(
+        taxes=Input("gda.tax-ciblage", columns=["Id", "Asset__r"], chunk_size=5_000),
+        out=Output("gda.ciblage-train"),
+    )
+
 ``pandas`` and ``pyarrow`` are included in the base install.
 """
 
@@ -38,6 +47,7 @@ import functools
 import inspect
 import io
 import os
+import re
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from gwenlake.exceptions import GwenlakeException
@@ -45,6 +55,13 @@ from gwenlake.exceptions import GwenlakeException
 
 # Rows per page when reading/writing a dataset in chunks (LIMIT/OFFSET).
 DEFAULT_CHUNK_SIZE = 50_000
+
+# A full scan of a large dataset is not an ordinary request: the engine has to
+# read every parquet file behind it before the first byte comes back, which can
+# take minutes. The client's 60s default is a timeout on *that*, so reads carry
+# their own — otherwise a big input fails with `httpx.ReadTimeout` regardless of
+# how well the query itself is doing.
+DEFAULT_READ_TIMEOUT = 600.0
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +81,29 @@ class _DatasetRef:
 
 
 class Input(_DatasetRef):
-    """References an input dataset for a transform."""
+    """References an input dataset for a transform.
+
+    ``columns`` restricts the read to the named top-level columns — the single
+    most effective way to cut the cost of a wide dataset, since a transform that
+    uses ten of two hundred columns otherwise pays to move all two hundred.
+    ``chunk_size`` and ``order_by`` steer the LIMIT/OFFSET paging.
+    """
+
+    def __init__(
+        self,
+        ref: str,
+        *,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = DEFAULT_CHUNK_SIZE,
+        order_by: Optional[str] = None,
+    ):
+        super().__init__(ref)
+        self.columns = list(columns) if columns is not None else None
+        self.chunk_size = chunk_size
+        self.order_by = order_by
+
+    def read_options(self) -> Dict[str, Any]:
+        return {"columns": self.columns, "chunk_size": self.chunk_size, "order_by": self.order_by}
 
 
 class Output(_DatasetRef):
@@ -134,19 +173,55 @@ def _sql_table(client: Any, ref: str) -> str:
     return f"{handle}:{branch}" if branch else handle
 
 
-def _run_rows(client: Any, statement: str) -> List[Dict[str, Any]]:
-    """Run a SQL statement and return its rows (the ``data`` list)."""
-    result = client.statements.create(statement=statement, format="json")
-    return result.get("data", []) if isinstance(result, dict) else (result or [])
+def _require_pyarrow():
+    try:
+        import pyarrow as pa
+    except ImportError as exc:  # pragma: no cover
+        raise GwenlakeException(
+            "pyarrow is required for transforms; install with: pip install gwenlake"
+        ) from exc
+    return pa
 
 
-def _iter_row_pages(
+def _quote_ident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _select_clause(columns: Optional[Iterable[str]]) -> str:
+    """The projection to put after SELECT — every column, or just the named ones."""
+    cols = list(columns) if columns is not None else None
+    if not cols:
+        return "*"
+    return ", ".join(_quote_ident(c) for c in cols)
+
+
+def _run_arrow(client: Any, statement: str) -> Any:
+    """Run a SQL statement and return its result as a ``pyarrow.Table``.
+
+    Arrow, not JSON: these payloads are dominated by wide, deeply nested rows,
+    and JSON re-encodes every field name on every row. On a 232-column Salesforce
+    export that is a ~27x blow-up over the columnar form (112 MB of parquet
+    becomes ~3 GB of JSON), which is what turns an ordinary read into a timeout.
+    """
+    pa = _require_pyarrow()
+    content = client.statements.create(
+        statement=statement, format="pyarrow", timeout=DEFAULT_READ_TIMEOUT
+    )
+    if not content:
+        return pa.table({})
+    with pa.ipc.open_file(pa.BufferReader(content)) as reader:
+        return reader.read_all()
+
+
+def _iter_arrow_pages(
     client: Any,
     table: str,
     chunk_size: int,
+    columns: Optional[Iterable[str]] = None,
     order_by: Optional[str] = None,
-) -> Iterator[List[Dict[str, Any]]]:
-    """Yield successive pages of rows via ``LIMIT/OFFSET`` until exhausted.
+) -> Iterator[Any]:
+    """Yield successive pages as ``pyarrow.Table`` via ``LIMIT/OFFSET`` until
+    exhausted.
 
     Without an ``order_by`` the page boundaries rely on the engine's scan order,
     which DuckDB keeps stable for a static dataset; pass ``order_by`` (e.g. a
@@ -154,17 +229,18 @@ def _iter_row_pages(
     """
     if chunk_size <= 0:
         raise ValueError("chunk_size must be a positive integer")
+    projection = _select_clause(columns)
     order = f" ORDER BY {order_by}" if order_by else ""
     offset = 0
     while True:
-        rows = _run_rows(
+        page = _run_arrow(
             client,
-            f"SELECT * FROM '{table}'{order} LIMIT {chunk_size} OFFSET {offset}",
+            f"SELECT {projection} FROM '{table}'{order} LIMIT {chunk_size} OFFSET {offset}",
         )
-        if not rows:
+        if page.num_rows == 0:
             break
-        yield rows
-        if len(rows) < chunk_size:
+        yield page
+        if page.num_rows < chunk_size:
             break
         offset += chunk_size
 
@@ -173,33 +249,38 @@ def _iter_dataframes(
     client: Any,
     ref: str,
     chunk_size: int,
+    columns: Optional[Iterable[str]] = None,
     order_by: Optional[str] = None,
 ) -> Iterator[Any]:
     """Yield the dataset as successive ``pandas.DataFrame`` chunks."""
-    pd = _require_pandas()
+    _require_pandas()
     table = _sql_table(client, ref)
-    for rows in _iter_row_pages(client, table, chunk_size, order_by):
-        yield pd.DataFrame(rows)
+    for page in _iter_arrow_pages(client, table, chunk_size, columns, order_by):
+        yield page.to_pandas()
 
 
 def _read_dataframe(
     client: Any,
     ref: str,
     *,
+    columns: Optional[Iterable[str]] = None,
     chunk_size: Optional[int] = None,
     order_by: Optional[str] = None,
 ):
     """Read a dataset into a single ``pandas.DataFrame``.
 
-    With ``chunk_size=None`` (default) it issues one ``SELECT *``. Pass a
-    ``chunk_size`` to page through with ``LIMIT/OFFSET`` and concatenate — same
-    result, but bounded request/response sizes for very large datasets.
+    With ``chunk_size=None`` it issues one ``SELECT``. Pass a ``chunk_size`` to
+    page through with ``LIMIT/OFFSET`` and concatenate — same result, but bounded
+    request/response sizes for very large datasets. ``columns`` restricts the
+    projection.
     """
     pd = _require_pandas()
     if chunk_size is None:
         table = _sql_table(client, ref)
-        return pd.DataFrame(_run_rows(client, f"SELECT * FROM '{table}'"))
-    chunks = list(_iter_dataframes(client, ref, chunk_size, order_by))
+        return _run_arrow(
+            client, f"SELECT {_select_clause(columns)} FROM '{table}'"
+        ).to_pandas()
+    chunks = list(_iter_dataframes(client, ref, chunk_size, columns, order_by))
     return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
 
 
@@ -358,10 +439,23 @@ class TransformInput:
     """An input dataset handle. Use ``.dataframe()`` for tabular data or
     ``.filesystem()`` for raw files."""
 
-    def __init__(self, client: Any, ref: str):
+    def __init__(
+        self,
+        client: Any,
+        ref: str,
+        *,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = DEFAULT_CHUNK_SIZE,
+        order_by: Optional[str] = None,
+    ):
         self._client = client
         self.ref = ref
         self._dataset_id: Optional[str] = None
+        # Defaults from the binding (`Input(..., columns=[...])`), overridable
+        # per call.
+        self.columns = list(columns) if columns is not None else None
+        self.chunk_size = chunk_size
+        self.order_by = order_by
 
     @property
     def dataset_id(self) -> str:
@@ -369,23 +463,44 @@ class TransformInput:
             self._dataset_id = _resolve_dataset_id(self._client, self.ref)
         return self._dataset_id
 
-    def dataframe(self, *, chunk_size: Optional[int] = DEFAULT_CHUNK_SIZE, order_by: Optional[str] = None):
+    def dataframe(
+        self,
+        *,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = None,
+        order_by: Optional[str] = None,
+    ):
         """Read the whole dataset into a ``pandas.DataFrame``.
 
         With ``chunk_size`` set, pages through with ``LIMIT/OFFSET`` and
-        concatenates (bounded request sizes); without it, one ``SELECT *``.
+        concatenates (bounded request sizes); with ``chunk_size=None``, one
+        ``SELECT``. ``columns`` restricts the projection. Unset arguments fall
+        back to whatever the ``Input`` binding declared.
         """
-        return _read_dataframe(self._client, self.ref, chunk_size=chunk_size, order_by=order_by)
+        return _read_dataframe(
+            self._client,
+            self.ref,
+            columns=self.columns if columns is None else columns,
+            chunk_size=self.chunk_size if chunk_size is None else chunk_size,
+            order_by=self.order_by if order_by is None else order_by,
+        )
 
     def iter_dataframes(
         self,
         *,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = None,
         order_by: Optional[str] = None,
     ) -> Iterator[Any]:
         """Iterate over the dataset as ``pandas.DataFrame`` chunks of ``chunk_size``
         rows — for datasets too large to hold in memory at once."""
-        return _iter_dataframes(self._client, self.ref, chunk_size, order_by)
+        return _iter_dataframes(
+            self._client,
+            self.ref,
+            chunk_size or self.chunk_size or DEFAULT_CHUNK_SIZE,
+            self.columns if columns is None else columns,
+            self.order_by if order_by is None else order_by,
+        )
 
     def filesystem(self) -> FileSystem:
         return FileSystem(self._client, self.dataset_id)
@@ -508,7 +623,10 @@ def transform_df(**bindings: _DatasetRef) -> Callable:
             call_kwargs: Dict[str, Any] = {}
             for name in params:
                 if name in inputs:
-                    call_kwargs[name] = TransformInput(client, inputs[name].ref).dataframe()
+                    spec = inputs[name]
+                    call_kwargs[name] = TransformInput(
+                        client, spec.ref, **spec.read_options()
+                    ).dataframe()
                 elif name in outputs:
                     # Tolerated for parity with the user's snippet; the return
                     # value is what actually gets written.
@@ -544,7 +662,8 @@ def transform(**bindings: _DatasetRef) -> Callable:
             call_kwargs: Dict[str, Any] = {}
             for name in params:
                 if name in inputs:
-                    call_kwargs[name] = TransformInput(client, inputs[name].ref)
+                    spec = inputs[name]
+                    call_kwargs[name] = TransformInput(client, spec.ref, **spec.read_options())
                 elif name in outputs:
                     call_kwargs[name] = TransformOutput(client, outputs[name].ref)
             return fn(**call_kwargs)
@@ -554,3 +673,70 @@ def transform(**bindings: _DatasetRef) -> Callable:
         return wrapper
 
     return decorator
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint dispatch
+# ---------------------------------------------------------------------------
+
+def _target_dataset_id() -> Optional[str]:
+    """The output dataset this build targets, read out of the storage URL the
+    engine exports as ``CATALOG_OUTPUT`` (``.../res.dataset.<uuid>/files/``)."""
+    out = os.environ.get("CATALOG_OUTPUT") or os.environ.get("CATALOG_OUTPUT_S3") or ""
+    # `.../datasets/res.dataset.<id>/files/` — take the whole path segment rather
+    # than assume the id's shape, so an unrecognised id can't quietly degrade
+    # into "no target" (which would run every transform in the module).
+    match = re.search(r"res\.dataset\.[^/]+", out)
+    return match.group(0) if match else None
+
+
+def _selected_transforms(client: Any, transforms: Tuple[Callable, ...]) -> List[Callable]:
+    """The subset of ``transforms`` this build asked for.
+
+    A build targets **one** output, but `uv run` executes the whole module — so a
+    file holding several transforms must pick, or it recomputes every one of them
+    on every build (and fails the build if any unrelated one fails). The engine
+    says which via ``CATALOG_FUNCTION`` (the transform's ``config.function``) or,
+    failing that, ``CATALOG_OUTPUT``. Outside a build neither is set and every
+    transform runs, which is what you want from a local run.
+    """
+    wanted_name = (os.environ.get("CATALOG_FUNCTION") or "").strip()
+    if wanted_name:
+        selected = [fn for fn in transforms if fn.__name__ == wanted_name]
+        if not selected:
+            available = ", ".join(fn.__name__ for fn in transforms)
+            raise GwenlakeException(
+                f"CATALOG_FUNCTION='{wanted_name}' matches no transform here (have: {available})"
+            )
+        return selected
+
+    target = _target_dataset_id()
+    if not target:
+        return list(transforms)
+
+    selected = []
+    for fn in transforms:
+        outputs = getattr(fn, "outputs", {}) or {}
+        for spec in outputs.values():
+            if _resolve_dataset_id(client, spec.ref) == target:
+                selected.append(fn)
+                break
+    if not selected:
+        available = ", ".join(fn.__name__ for fn in transforms)
+        raise GwenlakeException(
+            f"no transform here writes the build's target dataset {target} (have: {available})"
+        )
+    return selected
+
+
+def run(client: Any, *transforms: Callable) -> List[Any]:
+    """Run the decorated transforms this build targets, and only those.
+
+    Use it as the module entrypoint in place of calling each transform by hand::
+
+        if __name__ == "__main__":
+            run(client, transform_train, transform_inference)
+
+    Returns each selected transform's result, in the order given.
+    """
+    return [fn(client) for fn in _selected_transforms(client, transforms)]
