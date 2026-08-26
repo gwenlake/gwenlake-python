@@ -64,16 +64,17 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Tuple
+from typing import (Any, Callable, Dict, Iterable, Iterator, Optional,
+                    TYPE_CHECKING, Tuple)
 
-from .transforms import (
-    Input,
-    Model,
-    Output,
-    TransformInput,
-    TransformModel,
-    _split_bindings,
-)
+if TYPE_CHECKING:
+    from .transforms import Input, Model, Output
+
+
+def _bindings():
+    from .transforms import (Input, Model, Output, TransformInput,
+                             TransformModel, _split_bindings)
+    return Input, Model, Output, TransformInput, TransformModel, _split_bindings
 
 __all__ = ["train", "Run", "Tracker", "Preemption", "Input", "Output", "Model"]
 
@@ -416,7 +417,8 @@ def train(*, steps: int, eval_every: int = 1000,
     additionally receives ``run``, and what it returns is stored as the
     model's metrics; returning nothing stores :meth:`Run.summary` instead.
     """
-    inputs, outputs, models = _split_bindings(bindings)
+    _, _, _, TransformInput, TransformModel, _split = _bindings()
+    inputs, outputs, models = _split(bindings)
     if len(outputs) != 1:
         raise TypeError(
             f"train expects exactly one Output (the model), got {len(outputs)}")
