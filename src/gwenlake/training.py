@@ -75,7 +75,7 @@ from .transforms import (
     _split_bindings,
 )
 
-__all__ = ["train", "Run", "Input", "Output", "Model"]
+__all__ = ["train", "Run", "Tracker", "Preemption", "Input", "Output", "Model"]
 
 STATE_FILE = "run-state.json"
 RUN_ID_FILE = "mlflow-run-id"
@@ -148,6 +148,44 @@ def run_name(model: str, explicit: Optional[str] = None,
     return f"{model}-{suffix or datetime.now().strftime('%Y%m%d-%H%M')}"
 
 
+class Preemption:
+    """Turns SIGTERM into a flag the loop reads where it chooses.
+
+    Usable on its own, for a training loop that already owns its step
+    accounting and its checkpoints -- :class:`Run` holds one of these.
+
+        preemption = Preemption()
+        for step in ...:
+            ...
+            if preemption.requested:      # after a checkpoint, never mid-step
+                sys.exit(143)
+
+    Two details make the naive version fail. `exec`'d as a container
+    entrypoint the process is PID 1, and Linux delivers **no** signal to PID 1
+    whose disposition is the default; Python installs a handler for SIGINT
+    only, so SIGTERM was silently discarded and the pod was SIGKILLed at the
+    end of its grace period. And a handler must not checkpoint itself: it
+    runs between bytecode instructions, possibly mid-optimiser-step, and the
+    frameworks underneath are not reentrant. So it raises a flag, nothing
+    more.
+    """
+
+    def __init__(self, quiet: bool = False):
+        self.requested = False
+        self._quiet = quiet
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self._catch)
+            except ValueError:
+                pass        # not the main thread: nothing to install
+
+    def _catch(self, signum, _frame) -> None:
+        self.requested = True
+        if not self._quiet:
+            print(f"gwenlake: {signal.Signals(signum).name} received, "
+                  f"stopping at the next safe point", flush=True)
+
+
 class _Checkpoint:
     """The handle yielded by :meth:`Run.checkpoint`."""
 
@@ -179,7 +217,7 @@ class Run:
 
         self.step = 0
         self.at_eval = False
-        self._preempted = False
+        self._preemption = Preemption(quiet=True)
         self._started = time.monotonic()
         self._best: Dict[str, float] = {}
 
@@ -192,29 +230,13 @@ class Run:
         #: The directory to load from -- the same one, which is the point.
         self.resume_path: Path = self.dir
 
-        # A handler that only raises a flag. It runs between bytecode
-        # instructions, possibly mid-optimiser-step, and the frameworks
-        # underneath are not reentrant; the loop reads the flag where its own
-        # state is coherent.
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
-                signal.signal(sig, self._catch)
-            except ValueError:
-                pass        # not the main thread: nothing to install
-
-        self._tracker = _Tracker(self.dir, params, model=model, name=name,
+        self._tracker = Tracker(self.dir, params, model=model, name=name,
                                  experiment=experiment, enabled=tracking)
-
-    # ------------------------------------------------------------ signals --
-    def _catch(self, signum, _frame) -> None:
-        self._preempted = True
-        print(f"gwenlake: {signal.Signals(signum).name} received, "
-              f"stopping after step {self.step}", flush=True)
 
     @property
     def preempted(self) -> bool:
         """True once eviction has been asked for."""
-        return self._preempted
+        return self._preemption.requested
 
     # -------------------------------------------------------------- state --
     def _read_state(self) -> Dict[str, Any]:
@@ -257,7 +279,7 @@ class Run:
             self.step = step
             self.at_eval = (step % self.eval_every == 0) or step == self.total_steps
             yield step, batch
-            if self._preempted:
+            if self._preemption.requested:
                 # Deliberately NOT recording `step` here. The resume point is
                 # the last CHECKPOINT, not the last step executed: the two
                 # differ by up to eval_every, and resuming at the loop
@@ -297,10 +319,10 @@ class Run:
         return {**self._best,
                 "steps": self.step,
                 "elapsed_s": round(time.monotonic() - self._started, 1),
-                "preempted": self._preempted}
+                "preempted": self._preemption.requested}
 
 
-class _Tracker:
+class Tracker:
     """MLflow, optional and inert when it cannot be reached."""
 
     def __init__(self, out: Path, params: Dict[str, Any], *, model: str,
