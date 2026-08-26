@@ -1,0 +1,355 @@
+"""Training that survives being interrupted.
+
+``transforms.train`` already produces a model from datasets, and its
+ergonomics are the ones used here. What it cannot express is a run that is
+*long*: a build reads its inputs into memory, runs to completion, and writes
+its output. A training on a shared GPU does none of those things — the data
+does not fit, the run lasts hours, and it is evicted whenever inference needs
+the card.
+
+So this module keeps the binding style and adds the one object that
+difference requires: a :class:`Run`, which owns the four things that are easy
+to get wrong and expensive to get wrong.
+
+    from gwenlake.training import train, Input, Output
+
+    @train(
+        training_set=Input("cyim.bcmc-train"),
+        output=Output("cyim.bcmc"),
+        steps=30000, eval_every=1000,
+    )
+    def fit(training_set, output, run):
+        model, opt = build()
+        if run.resumed:                      # a previous life left state here
+            load(model, opt, run.resume_path)
+
+        for step, batch in run.steps(batches(training_set)):
+            run.log({"loss": train_step(model, opt, batch)})
+            if run.at_eval:
+                with run.checkpoint() as ck:
+                    save(model, opt, ck.path("state.safetensors"))
+                    ck.metrics = evaluate(model)
+
+        return run.summary()
+
+**What the Run owns, and why each one is here.** Every item below was a real
+failure before it was a feature:
+
+- *Eviction.* SIGTERM is caught and turned into an ordinary end of loop, so
+  the run stops between two steps rather than mid-optimiser. The handler is
+  installed even though the process is PID 1 in a container -- where Linux
+  delivers **no** signal whose disposition is the default, and Python
+  installs one for SIGINT only. Without it the pod is SIGKILLed at the end of
+  its grace period and everything since the last checkpoint is lost.
+- *Resumption.* Checkpoints live in a directory keyed to the run, and the
+  step they carry is what `steps()` fast-forwards to. A restarted pod picks
+  the run back up instead of starting it over.
+- *Tracking.* The tracking run id is written next to the checkpoints, not
+  held in memory, so a restart reports into the SAME run. Otherwise every
+  eviction opens a new one and the curve comes back cut into pieces.
+- *Durability.* Checkpoints are uploaded as they are written, not at the end:
+  a run that is evicted never reaches the end, and the volume it writes to is
+  usually a disk on one node.
+
+Tracking degrades to a no-op when it is unreachable. A metrics outage must
+never take a training down with it.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Tuple
+
+from .transforms import (
+    Input,
+    Model,
+    Output,
+    TransformInput,
+    TransformModel,
+    _split_bindings,
+)
+
+__all__ = ["train", "Run", "Input", "Output", "Model"]
+
+STATE_FILE = "run-state.json"
+#: Where a run keeps its checkpoints. The platform points this at a volume
+#: that outlives the pod; a laptop run gets a local directory.
+WORK_DIR_ENV = "GWENLAKE_RUN_DIR"
+#: Set by the platform to the name of the function to run, as the catalog
+#: build engine does with CATALOG_FUNCTION.
+FUNCTION_ENV = "GWENLAKE_TRAIN_FUNCTION"
+
+
+class _Checkpoint:
+    """The handle yielded by :meth:`Run.checkpoint`."""
+
+    def __init__(self, run: "Run", step: int):
+        self._run, self.step = run, step
+        self.metrics: Dict[str, float] = {}
+        self.written: list[Path] = []
+
+    def path(self, name: str) -> Path:
+        """A path to write to, inside this run's directory."""
+        p = self._run.dir / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self.written.append(p)
+        return p
+
+
+class Run:
+    """The state a training carries across its own interruptions."""
+
+    def __init__(self, name: str, params: Dict[str, Any], *,
+                 steps: int, eval_every: int, work_dir: Optional[Path] = None,
+                 experiment: Optional[str] = None):
+        self.name = name
+        self.total_steps = steps
+        self.eval_every = eval_every
+        self.dir = Path(work_dir or os.environ.get(WORK_DIR_ENV) or f"./runs/{name}")
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+        self.step = 0
+        self.at_eval = False
+        self._preempted = False
+        self._started = time.monotonic()
+        self._best: Dict[str, float] = {}
+
+        state = self._read_state()
+        # The step of the last CHECKPOINT -- see `steps()` for why this is
+        # not the last step executed.
+        self.start_step: int = state.get("step", 0)
+        #: True when a previous life left checkpoints here.
+        self.resumed: bool = self.start_step > 0
+        #: The directory to load from -- the same one, which is the point.
+        self.resume_path: Path = self.dir
+
+        # A handler that only raises a flag. It runs between bytecode
+        # instructions, possibly mid-optimiser-step, and the frameworks
+        # underneath are not reentrant; the loop reads the flag where its own
+        # state is coherent.
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self._catch)
+            except ValueError:
+                pass        # not the main thread: nothing to install
+
+        self._tracker = _Tracker(self.dir, params, name=name,
+                                 experiment=experiment,
+                                 resumed=self.resumed)
+
+    # ------------------------------------------------------------ signals --
+    def _catch(self, signum, _frame) -> None:
+        self._preempted = True
+        print(f"gwenlake: {signal.Signals(signum).name} received, "
+              f"stopping after step {self.step}", flush=True)
+
+    @property
+    def preempted(self) -> bool:
+        """True once eviction has been asked for."""
+        return self._preempted
+
+    # -------------------------------------------------------------- state --
+    def _read_state(self) -> Dict[str, Any]:
+        p = self.dir / STATE_FILE
+        if not p.is_file():
+            return {}
+        try:
+            return json.loads(p.read_text())
+        except (OSError, ValueError):
+            # A truncated state file means the last write was interrupted.
+            # Starting over beats crashing on someone else's half-written JSON.
+            return {}
+
+    def _write_state(self, **fields: Any) -> None:
+        p = self.dir / STATE_FILE
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({**self._read_state(), **fields}, indent=2))
+        tmp.replace(p)      # atomic: a crash mid-write cannot corrupt it
+
+    # --------------------------------------------------------------- loop --
+    def steps(self, batches: Iterable[Any]) -> Iterator[Tuple[int, Any]]:
+        """Yield ``(step, batch)``, resuming and stopping on eviction.
+
+        Fast-forwards over the batches a previous life already consumed, so
+        the caller's loop reads the same whether it is a first run or the
+        fourth restart.
+        """
+        it = iter(batches)
+        for _ in range(self.start_step):
+            try:
+                next(it)
+            except StopIteration:
+                break
+
+        for step in range(self.start_step + 1, self.total_steps + 1):
+            try:
+                batch = next(it)
+            except StopIteration:
+                return
+            self.step = step
+            self.at_eval = (step % self.eval_every == 0) or step == self.total_steps
+            yield step, batch
+            if self._preempted:
+                # Deliberately NOT recording `step` here. The resume point is
+                # the last CHECKPOINT, not the last step executed: the two
+                # differ by up to eval_every, and resuming at the loop
+                # position while loading older weights would silently drop
+                # every update in between. Losing that much recomputation is
+                # the honest cost; losing it invisibly is not.
+                self._write_state(preempted=True)
+                self._tracker.close(status="KILLED")
+                return
+
+        self._write_state(step=self.total_steps, preempted=False)
+
+    # ------------------------------------------------------------ tracking --
+    def log(self, metrics: Dict[str, float]) -> None:
+        """Record metrics against the current step."""
+        self._tracker.log(metrics, self.step)
+
+    @contextmanager
+    def checkpoint(self) -> Iterator[_Checkpoint]:
+        """Write a checkpoint, and ship it.
+
+        Uploads on exit rather than at the end of training: a run that is
+        evicted never reaches the end, and the directory written to is
+        usually node-local.
+        """
+        ck = _Checkpoint(self, self.step)
+        yield ck
+        if ck.metrics:
+            self.log(ck.metrics)
+            self._best = {k: max(v, self._best.get(k, v)) for k, v in ck.metrics.items()}
+        self._write_state(step=ck.step, metrics=ck.metrics)
+        for p in ck.written:
+            self._tracker.artifact(p)
+
+    def summary(self) -> Dict[str, Any]:
+        """What the decorator stores on the model as its metrics."""
+        return {**self._best,
+                "steps": self.step,
+                "elapsed_s": round(time.monotonic() - self._started, 1),
+                "preempted": self._preempted}
+
+
+class _Tracker:
+    """MLflow, optional and inert when it is not there."""
+
+    RUN_ID_FILE = "mlflow-run-id"
+
+    def __init__(self, out: Path, params: Dict[str, Any], *, name: str,
+                 experiment: Optional[str], resumed: bool):
+        self.enabled, self._mlflow = False, None
+        try:
+            import mlflow
+        except ImportError:
+            return
+        try:
+            if experiment or os.environ.get("MLFLOW_EXPERIMENT"):
+                mlflow.set_experiment(experiment or os.environ["MLFLOW_EXPERIMENT"])
+            marker = out / self.RUN_ID_FILE
+            run_id = marker.read_text().strip() if marker.is_file() else None
+            run = mlflow.start_run(run_id=run_id, run_name=name)
+            if run_id is None:
+                marker.write_text(run.info.run_id)
+                mlflow.log_params(params)
+            self._mlflow, self.enabled = mlflow, True
+            print(f"gwenlake: tracking run {run.info.run_id}"
+                  f"{' (resumed)' if run_id else ''}", flush=True)
+        except Exception as e:                              # noqa: BLE001
+            print(f"gwenlake: tracking off ({e.__class__.__name__})", flush=True)
+
+    def log(self, metrics: Dict[str, float], step: int) -> None:
+        if not self.enabled:
+            return
+        try:
+            self._mlflow.log_metrics({k: float(v) for k, v in metrics.items()},
+                                     step=step)
+        except Exception:                                   # noqa: BLE001
+            pass        # a lost metric is no reason to stop a training
+
+    def artifact(self, path: Path) -> None:
+        if not self.enabled or not Path(path).is_file():
+            return
+        try:
+            self._mlflow.log_artifact(str(path))
+        except Exception:                                   # noqa: BLE001
+            pass
+
+    def close(self, status: str = "FINISHED") -> None:
+        if not self.enabled:
+            return
+        try:
+            self._mlflow.end_run(status=status)
+        except Exception:                                   # noqa: BLE001
+            pass
+
+
+def train(*, steps: int, eval_every: int = 1000,
+          experiment: Optional[str] = None,
+          **bindings: Any) -> Callable:
+    """Decorate a function that trains a model on the GPU pool.
+
+    Bindings work as in ``transforms.train`` -- ``Input`` arrives as a
+    :class:`TransformInput` (not a DataFrame: a training set is streamed, not
+    loaded), ``Output`` and ``Model`` as :class:`TransformModel`. The function
+    additionally receives ``run``, and what it returns is stored as the
+    model's metrics; returning nothing stores :meth:`Run.summary` instead.
+    """
+    inputs, outputs, models = _split_bindings(bindings)
+    if len(outputs) != 1:
+        raise TypeError(
+            f"train expects exactly one Output (the model), got {len(outputs)}")
+
+    def decorator(fn: Callable) -> Callable:
+        import functools
+        import inspect
+        params = inspect.signature(fn).parameters
+        if "run" not in params:
+            raise TypeError(
+                f"{fn.__name__} must accept a 'run' parameter -- it carries "
+                "resumption, eviction and tracking")
+
+        @functools.wraps(fn)
+        def wrapper(client: Any, **overrides: Any) -> Any:
+            run = Run(name=os.environ.get("GWENLAKE_RUN_NAME", fn.__name__),
+                      params={"steps": steps, "eval_every": eval_every,
+                              **{k: str(v.ref) for k, v in bindings.items()}},
+                      steps=overrides.pop("steps", steps),
+                      eval_every=overrides.pop("eval_every", eval_every),
+                      experiment=experiment)
+            call: Dict[str, Any] = {"run": run}
+            for name in params:
+                if name in inputs:
+                    call[name] = TransformInput(client, inputs[name].ref)
+                elif name in models or name in outputs:
+                    ref = (models.get(name) or outputs[name]).ref
+                    call[name] = TransformModel(client, ref)
+            try:
+                result = fn(**call)
+            finally:
+                run._tracker.close("KILLED" if run.preempted else "FINISHED")
+            metrics = result if isinstance(result, dict) else run.summary()
+            if client is not None:
+                try:
+                    TransformModel(client, next(iter(outputs.values())).ref).update(
+                        metrics=metrics)
+                except Exception as e:                      # noqa: BLE001
+                    # Outside a build the model endpoints are not reachable.
+                    # Said out loud rather than swallowed: the training did
+                    # happen and its metrics are in the tracker, but the
+                    # model card was not updated and that is worth knowing.
+                    print(f"gwenlake: model metrics not stored "
+                          f"({e.__class__.__name__}: {e})", flush=True)
+            return metrics
+
+        wrapper.inputs, wrapper.outputs, wrapper.models = inputs, outputs, models
+        wrapper.is_training = True
+        return wrapper
+
+    return decorator
