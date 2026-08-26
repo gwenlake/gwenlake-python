@@ -62,6 +62,7 @@ import os
 import signal
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Tuple
 
@@ -77,12 +78,74 @@ from .transforms import (
 __all__ = ["train", "Run", "Input", "Output", "Model"]
 
 STATE_FILE = "run-state.json"
+RUN_ID_FILE = "mlflow-run-id"
+ENV_FILE = ".env"
+#: The tracking server belongs to the project, not to each workstation's
+#: setup. MLFLOW_TRACKING_URI still wins when it is set.
+TRACKING_URI = "https://api.gwenlake.com/v1/mlflow"
+#: Credentials that make a remote server usable. Without one of them the
+#: tracker stays inert rather than opening a run that would be refused at
+#: the first call.
+CREDENTIAL_VARS = ("MLFLOW_TRACKING_TOKEN", "MLFLOW_TRACKING_PASSWORD",
+                   "MLFLOW_TRACKING_AWS_SIGV4", "MLFLOW_TRACKING_AUTH")
 #: Where a run keeps its checkpoints. The platform points this at a volume
 #: that outlives the pod; a laptop run gets a local directory.
 WORK_DIR_ENV = "GWENLAKE_RUN_DIR"
 #: Set by the platform to the name of the function to run, as the catalog
 #: build engine does with CATALOG_FUNCTION.
 FUNCTION_ENV = "GWENLAKE_TRAIN_FUNCTION"
+
+
+def load_env() -> None:
+    """Read the nearest `.env` into the environment.
+
+    Ten lines rather than a dependency: what is wanted is one token, and the
+    file is ours. A variable ALREADY in the environment is never overwritten
+    -- the platform passes its own secret and must keep winning over
+    whatever a checkout happens to contain.
+    """
+    for start in (Path.cwd().resolve(), Path(__file__).resolve().parent):
+        for base in (start, *start.parents):
+            path = base / ENV_FILE
+            if not path.is_file():
+                continue
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key, value = key.strip(), value.strip().strip("\'\"")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+            return
+
+
+def tracking_uri() -> str:
+    return os.environ.get("MLFLOW_TRACKING_URI") or TRACKING_URI
+
+
+def experiment_name(explicit: Optional[str] = None) -> str:
+    return (explicit or os.environ.get("MLFLOW_EXPERIMENT_NAME")
+            or os.environ.get("MLFLOW_EXPERIMENT") or "default")
+
+
+def run_name(model: str, explicit: Optional[str] = None,
+             experiment: Optional[str] = None) -> str:
+    """`attn`, `knn`, ... plus what tells two runs of the same model apart.
+
+    The platform names its Job after the project, the commit and the CI job,
+    and passes it as GWENLAKE_RUN_NAME. A leading project name is dropped:
+    the experiment already says which project this is, and repeating it
+    makes every run in the list start with the same word.
+    """
+    if explicit:
+        return explicit
+    suffix = (os.environ.get("GWENLAKE_RUN_NAME")
+              or os.environ.get("RUN_ID") or "").strip()
+    exp = (experiment or "").lower()
+    if exp and suffix.lower().startswith(exp + "-"):
+        suffix = suffix[len(exp) + 1:]
+    return f"{model}-{suffix or datetime.now().strftime('%Y%m%d-%H%M')}"
 
 
 class _Checkpoint:
@@ -106,7 +169,8 @@ class Run:
 
     def __init__(self, name: str, params: Dict[str, Any], *,
                  steps: int, eval_every: int, work_dir: Optional[Path] = None,
-                 experiment: Optional[str] = None):
+                 experiment: Optional[str] = None, model: str = "model",
+                 tracking: bool = True):
         self.name = name
         self.total_steps = steps
         self.eval_every = eval_every
@@ -138,9 +202,8 @@ class Run:
             except ValueError:
                 pass        # not the main thread: nothing to install
 
-        self._tracker = _Tracker(self.dir, params, name=name,
-                                 experiment=experiment,
-                                 resumed=self.resumed)
+        self._tracker = _Tracker(self.dir, params, model=model, name=name,
+                                 experiment=experiment, enabled=tracking)
 
     # ------------------------------------------------------------ signals --
     def _catch(self, signum, _frame) -> None:
@@ -238,31 +301,54 @@ class Run:
 
 
 class _Tracker:
-    """MLflow, optional and inert when it is not there."""
+    """MLflow, optional and inert when it cannot be reached."""
 
-    RUN_ID_FILE = "mlflow-run-id"
-
-    def __init__(self, out: Path, params: Dict[str, Any], *, name: str,
-                 experiment: Optional[str], resumed: bool):
+    def __init__(self, out: Path, params: Dict[str, Any], *, model: str,
+                 name: Optional[str], experiment: Optional[str],
+                 enabled: bool = True):
         self.enabled, self._mlflow = False, None
+        if not enabled or os.environ.get("MLFLOW_DISABLE"):
+            return
+        load_env()
+        uri = tracking_uri()
+        # A local file:// or a hand-started server needs no credential; a
+        # remote one does, and running without one is a run refused at the
+        # first call rather than a trace.
+        if uri.startswith("http") and not any(os.environ.get(v)
+                                              for v in CREDENTIAL_VARS):
+            print(f"gwenlake: no {CREDENTIAL_VARS[0]} in the environment or "
+                  f"in {ENV_FILE}: tracking off", flush=True)
+            return
         try:
             import mlflow
         except ImportError:
+            print("gwenlake: mlflow not installed, tracking off "
+                  "(pip install 'mlflow-skinny[extras]')", flush=True)
             return
         try:
-            if experiment or os.environ.get("MLFLOW_EXPERIMENT"):
-                mlflow.set_experiment(experiment or os.environ["MLFLOW_EXPERIMENT"])
-            marker = out / self.RUN_ID_FILE
+            # A tracking server that hangs must not hold a GPU hostage.
+            os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "20")
+            os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "3")
+            mlflow.set_tracking_uri(uri)
+            exp = experiment_name(experiment)
+            mlflow.set_experiment(exp)
+            # The run id lives on disk beside the checkpoints, not in memory:
+            # that is what survives an eviction.
+            marker = Path(out) / RUN_ID_FILE
             run_id = marker.read_text().strip() if marker.is_file() else None
-            run = mlflow.start_run(run_id=run_id, run_name=name)
+            run = mlflow.start_run(run_id=run_id,
+                                   run_name=run_name(model, name, exp))
             if run_id is None:
+                marker.parent.mkdir(parents=True, exist_ok=True)
                 marker.write_text(run.info.run_id)
                 mlflow.log_params(params)
             self._mlflow, self.enabled = mlflow, True
-            print(f"gwenlake: tracking run {run.info.run_id}"
-                  f"{' (resumed)' if run_id else ''}", flush=True)
+            print(f"gwenlake: {uri} · experiment {exp} · run "
+                  f"{run.info.run_name} ({run.info.run_id})"
+                  f"{' resumed' if run_id else ''}", flush=True)
         except Exception as e:                              # noqa: BLE001
-            print(f"gwenlake: tracking off ({e.__class__.__name__})", flush=True)
+            print(f"gwenlake: tracking off ({e.__class__.__name__}: {e})",
+                  flush=True)
 
     def log(self, metrics: Dict[str, float], step: int) -> None:
         if not self.enabled:
@@ -291,9 +377,16 @@ class _Tracker:
 
 
 def train(*, steps: int, eval_every: int = 1000,
-          experiment: Optional[str] = None,
+          model: str = "model", experiment: Optional[str] = None,
+          run_name: Optional[str] = None, tracking: bool = True,
           **bindings: Any) -> Callable:
     """Decorate a function that trains a model on the GPU pool.
+
+    ``model`` names the thing being trained (``attn``, ``knn``, ...): runs
+    are named after it, so two heads on the same data stay apart in the
+    experiment. ``tracking=False`` runs without touching the tracking
+    server. Both are overridable per call, which is what a ``--no-mlflow``
+    flag ends up doing.
 
     Bindings work as in ``transforms.train`` -- ``Input`` arrives as a
     :class:`TransformInput` (not a DataFrame: a training set is streamed, not
@@ -317,12 +410,16 @@ def train(*, steps: int, eval_every: int = 1000,
 
         @functools.wraps(fn)
         def wrapper(client: Any, **overrides: Any) -> Any:
-            run = Run(name=os.environ.get("GWENLAKE_RUN_NAME", fn.__name__),
+            run = Run(name=run_name,
                       params={"steps": steps, "eval_every": eval_every,
+                              "model": model,
                               **{k: str(v.ref) for k, v in bindings.items()}},
                       steps=overrides.pop("steps", steps),
                       eval_every=overrides.pop("eval_every", eval_every),
-                      experiment=experiment)
+                      experiment=experiment, model=model,
+                      # A run that must not touch the tracking server: the
+                      # `--no-mlflow` of a command line, as a parameter.
+                      tracking=overrides.pop("tracking", tracking))
             call: Dict[str, Any] = {"run": run}
             for name in params:
                 if name in inputs:
