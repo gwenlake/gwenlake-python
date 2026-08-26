@@ -31,6 +31,7 @@ def batches(source, size=32):
     output=Output("Project_A.my_model"),
     steps=200,
     eval_every=50,
+    model="demo",
 )
 def fit(training_set, output, run):
     weight, loss = 0.5, 1.0
