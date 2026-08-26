@@ -1,9 +1,9 @@
 [project]
 name = "gwenlake"
-version = "0.9.3"
+version = "0.9.4"
 description = "Gwenlake Python Client"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "click>=8.1.7",
     "pyarrow>=14.0",
