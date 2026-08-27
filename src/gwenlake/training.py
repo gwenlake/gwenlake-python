@@ -76,7 +76,8 @@ def _bindings():
                              TransformModel, _split_bindings)
     return Input, Model, Output, TransformInput, TransformModel, _split_bindings
 
-__all__ = ["train", "Run", "Tracker", "Preemption", "Input", "Output", "Model"]
+__all__ = ["train", "entrypoint", "discover", "Run", "Tracker",
+           "Preemption", "Input", "Output", "Model"]
 
 STATE_FILE = "run-state.json"
 RUN_ID_FILE = "mlflow-run-id"
@@ -95,6 +96,20 @@ WORK_DIR_ENV = "GWENLAKE_RUN_DIR"
 #: Set by the platform to the name of the function to run, as the catalog
 #: build engine does with CATALOG_FUNCTION.
 FUNCTION_ENV = "GWENLAKE_TRAIN_FUNCTION"
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve the catalog names lazily.
+
+    They are re-exported for convenience -- `from gwenlake.training import
+    train, Input, Output` reads well -- but resolving them at import time
+    would drag pandas and pydantic into every training container. This makes
+    them cost nothing until someone actually names one.
+    """
+    if name in ("Input", "Output", "Model"):
+        from . import transforms
+        return getattr(transforms, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def load_env() -> None:
@@ -271,6 +286,16 @@ class Run:
         the caller's loop reads the same whether it is a first run or the
         fourth restart.
         """
+        if self.start_step >= self.total_steps:
+            # Doing nothing quietly is the worst of the three outcomes here:
+            # the caller asked for fewer steps than a previous life already
+            # ran, and would otherwise get a green run that trained nothing.
+            print(f"gwenlake: already at step {self.start_step} and steps is "
+                  f"{self.total_steps} -- nothing to do. Raise steps to train "
+                  f"further, or point the run at a fresh directory.",
+                  flush=True)
+            return
+
         it = iter(batches)
         for _ in range(self.start_step):
             try:
@@ -408,6 +433,7 @@ class Tracker:
 def train(*, steps: int, eval_every: int = 1000,
           model: str = "model", experiment: Optional[str] = None,
           run_name: Optional[str] = None, tracking: bool = True,
+          params: Optional[Dict[str, Any]] = None,
           **bindings: Any) -> Callable:
     """Decorate a function that trains a model on the GPU pool.
 
@@ -415,6 +441,9 @@ def train(*, steps: int, eval_every: int = 1000,
     receives only ``run``, which is the shape a project whose data the
     platform mounts will want; with them it also receives its ``Input`` and
     ``Output``, and the returned metrics land on the model.
+
+    ``params`` carries the hyperparameters worth recording alongside the
+    run -- everything the tracker should show next to its metrics.
 
     ``start_step`` may be passed at call time by a project that reads the
     resume point from its own checkpoints -- then that is the only source of
@@ -450,8 +479,12 @@ def train(*, steps: int, eval_every: int = 1000,
     def decorator(fn: Callable) -> Callable:
         import functools
         import inspect
-        params = inspect.signature(fn).parameters
-        if "run" not in params:
+        # `signature` here, not `params`: `params` is the decorator's own
+        # argument, and shadowing it silently dropped every hyperparameter a
+        # caller passed -- a run recorded four parameters instead of
+        # thirteen, with nothing to say so.
+        signature = inspect.signature(fn).parameters
+        if "run" not in signature:
             raise TypeError(
                 f"{fn.__name__} must accept a 'run' parameter -- it carries "
                 "resumption, eviction and tracking")
@@ -460,7 +493,7 @@ def train(*, steps: int, eval_every: int = 1000,
         def wrapper(client: Any, **overrides: Any) -> Any:
             run = Run(name=run_name,
                       params={"steps": steps, "eval_every": eval_every,
-                              "model": model,
+                              "model": model, **(params or {}),
                               **{k: str(v.ref) for k, v in bindings.items()}},
                       steps=overrides.pop("steps", steps),
                       eval_every=overrides.pop("eval_every", eval_every),
@@ -470,7 +503,7 @@ def train(*, steps: int, eval_every: int = 1000,
                       # `--no-mlflow` of a command line, as a parameter.
                       tracking=overrides.pop("tracking", tracking))
             call: Dict[str, Any] = {"run": run}
-            for name in params:
+            for name in signature:
                 if name in inputs:
                     call[name] = TransformInput(client, inputs[name].ref)
                 elif name in models or name in outputs:
@@ -499,3 +532,127 @@ def train(*, steps: int, eval_every: int = 1000,
         return wrapper
 
     return decorator
+
+
+# ---------------------------------------------------------------------------
+# Discovery
+# ---------------------------------------------------------------------------
+
+FUNCTION_ENV = "GWENLAKE_TRAIN_FUNCTION"
+#: Where to look. A project's code is under src/ or at the root; nothing else
+#: is worth importing, and importing a virtualenv would be a disaster.
+_SKIP = {".git", ".venv", "venv", "node_modules", "__pycache__", "build",
+         "dist", "tests", "test", ".tox", ".mypy_cache", "site-packages"}
+
+
+def discover(root: str | Path = ".") -> Dict[str, Callable]:
+    """Every ``@train``-decorated function in a project, by name.
+
+    Imports each candidate module, which is the only way to see a decorator:
+    it exists at import time, not in the source text. Modules that fail to
+    import are reported and skipped rather than aborting the search -- one
+    broken file must not hide the function you asked for.
+
+    This is what lets the platform run a project without being told where its
+    training lives: `gwenlake train` finds it.
+    """
+    import importlib.util
+    import sys
+
+    root = Path(root).resolve()
+    found: Dict[str, Callable] = {}
+    # Only src/ when it exists. Scanning the root as well imports whatever
+    # sits beside the code -- a data generator, a notebook helper -- and
+    # importing a script RUNS it. One such script wrote its output to a
+    # directory named after a command-line flag before this was fixed.
+    roots = [root / "src"] if (root / "src").is_dir() else [root]
+
+    for base in roots:
+        for path in sorted(base.rglob("*.py")):
+            if any(part in _SKIP or part.startswith(".") for part in path.parts):
+                continue
+            if path.name.startswith("_") and path.name != "__init__.py":
+                continue
+            name = f"_gwenlake_scan_{abs(hash(str(path)))}"
+            try:
+                spec = importlib.util.spec_from_file_location(name, path)
+                if spec is None or spec.loader is None:
+                    continue
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[name] = module
+                spec.loader.exec_module(module)
+            except Exception as e:                          # noqa: BLE001
+                # A module that will not import is not necessarily the one
+                # being looked for -- say so and keep going.
+                print(f"gwenlake: skipped {path.relative_to(root)} "
+                      f"({e.__class__.__name__}: {e})", flush=True)
+                continue
+            for attr in vars(module).values():
+                if callable(attr) and getattr(attr, "is_training", False):
+                    found.setdefault(attr.__name__, attr)
+    return found
+
+
+def entrypoint(root: str | Path = ".", client: Any = None,
+               function: Optional[str] = None, **overrides: Any) -> Any:
+    """Find the training this run is for, and run it.
+
+    The name comes from ``function``, else ``GWENLAKE_TRAIN_FUNCTION``. With
+    neither, a project holding exactly one training runs it; a project
+    holding several is asked which, rather than picking one -- running the
+    wrong training for an hour is worse than an error.
+    """
+    found = discover(root)
+    if not found:
+        raise RuntimeError(
+            f"no @train-decorated function under {Path(root).resolve()}")
+
+    wanted = (function or os.environ.get(FUNCTION_ENV) or "").strip()
+    if wanted:
+        if wanted not in found:
+            raise RuntimeError(
+                f"{FUNCTION_ENV}={wanted!r} matches nothing "
+                f"(have: {', '.join(sorted(found))})")
+        chosen = found[wanted]
+    elif len(found) == 1:
+        chosen = next(iter(found.values()))
+    else:
+        raise RuntimeError(
+            f"{len(found)} trainings here ({', '.join(sorted(found))}); "
+            f"set {FUNCTION_ENV} to say which")
+
+    print(f"gwenlake: running {chosen.__name__}", flush=True)
+    return chosen(client, **overrides)
+
+
+def _cli() -> None:
+    """`gwenlake-train` -- one command for every project on the pool.
+
+    Deliberately not a subcommand of `gwenlake`: that group builds an
+    authenticated client on every invocation, and a training whose data the
+    platform mounts has no catalog to talk to. Requiring credentials to run
+    it would be requiring them for nothing.
+    """
+    import argparse
+
+    p = argparse.ArgumentParser(
+        prog="gwenlake-train",
+        description="Find this project's @train-decorated training and run it.")
+    p.add_argument("--path", default=".", help="project root to search")
+    p.add_argument("--function", default=None,
+                   help="which training, when the project holds several")
+    p.add_argument("--steps", type=int, default=None)
+    p.add_argument("--eval-every", type=int, default=None)
+    p.add_argument("--list", action="store_true",
+                   help="show what was found and stop")
+    args = p.parse_args()
+
+    if args.list:
+        for name in sorted(discover(args.path)):
+            print(name)
+        return
+
+    overrides = {k: v for k, v in (("steps", args.steps),
+                                   ("eval_every", args.eval_every))
+                 if v is not None}
+    entrypoint(args.path, function=args.function, **overrides)
