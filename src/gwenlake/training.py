@@ -209,7 +209,7 @@ class Run:
     def __init__(self, name: str, params: Dict[str, Any], *,
                  steps: int, eval_every: int, work_dir: Optional[Path] = None,
                  experiment: Optional[str] = None, model: str = "model",
-                 tracking: bool = True):
+                 tracking: bool = True, start_step: Optional[int] = None):
         self.name = name
         self.total_steps = steps
         self.eval_every = eval_every
@@ -225,7 +225,13 @@ class Run:
         state = self._read_state()
         # The step of the last CHECKPOINT -- see `steps()` for why this is
         # not the last step executed.
-        self.start_step: int = state.get("step", 0)
+        #
+        # `start_step` lets a project that already reads the step from its
+        # own checkpoints keep that as the single source of truth. Two
+        # sources disagreeing means loading weights from one step and
+        # resuming the loop at another, silently dropping the difference.
+        self.start_step: int = (start_step if start_step is not None
+                                else state.get("step", 0))
         #: True when a previous life left checkpoints here.
         self.resumed: bool = self.start_step > 0
         #: The directory to load from -- the same one, which is the point.
@@ -405,6 +411,15 @@ def train(*, steps: int, eval_every: int = 1000,
           **bindings: Any) -> Callable:
     """Decorate a function that trains a model on the GPU pool.
 
+    Catalog bindings are optional. Without them the decorated function
+    receives only ``run``, which is the shape a project whose data the
+    platform mounts will want; with them it also receives its ``Input`` and
+    ``Output``, and the returned metrics land on the model.
+
+    ``start_step`` may be passed at call time by a project that reads the
+    resume point from its own checkpoints -- then that is the only source of
+    truth, and the library does not compete with it.
+
     ``model`` names the thing being trained (``attn``, ``knn``, ...): runs
     are named after it, so two heads on the same data stay apart in the
     experiment. ``tracking=False`` runs without touching the tracking
@@ -417,11 +432,20 @@ def train(*, steps: int, eval_every: int = 1000,
     additionally receives ``run``, and what it returns is stored as the
     model's metrics; returning nothing stores :meth:`Run.summary` instead.
     """
-    _, _, _, TransformInput, TransformModel, _split = _bindings()
-    inputs, outputs, models = _split(bindings)
-    if len(outputs) != 1:
-        raise TypeError(
-            f"train expects exactly one Output (the model), got {len(outputs)}")
+    # Catalog bindings are OPTIONAL here, unlike in transforms.train. A
+    # training on the pool reads what the platform mounts and ships its
+    # artifacts to the tracking server; requiring an Output would exclude
+    # every project whose data is not in the catalog, which is most of them
+    # to begin with.
+    if bindings:
+        _, _, _, TransformInput, TransformModel, _split = _bindings()
+        inputs, outputs, models = _split(bindings)
+        if len(outputs) > 1:
+            raise TypeError(
+                f"train takes at most one Output (the model), got {len(outputs)}")
+    else:
+        TransformInput = TransformModel = None
+        inputs, outputs, models = {}, {}, {}
 
     def decorator(fn: Callable) -> Callable:
         import functools
@@ -441,6 +465,7 @@ def train(*, steps: int, eval_every: int = 1000,
                       steps=overrides.pop("steps", steps),
                       eval_every=overrides.pop("eval_every", eval_every),
                       experiment=experiment, model=model,
+                      start_step=overrides.pop("start_step", None),
                       # A run that must not touch the tracking server: the
                       # `--no-mlflow` of a command line, as a parameter.
                       tracking=overrides.pop("tracking", tracking))
@@ -456,7 +481,7 @@ def train(*, steps: int, eval_every: int = 1000,
             finally:
                 run._tracker.close("KILLED" if run.preempted else "FINISHED")
             metrics = result if isinstance(result, dict) else run.summary()
-            if client is not None:
+            if client is not None and outputs:
                 try:
                     TransformModel(client, next(iter(outputs.values())).ref).update(
                         metrics=metrics)
