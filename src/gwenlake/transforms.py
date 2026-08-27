@@ -633,11 +633,11 @@ def _catalog_models() -> Dict[str, Dict[str, Any]]:
 
 def _resolve_model(client: Any, ref: str) -> Dict[str, Any]:
     """Resolve ``"<project_alias>.<model_alias>"`` (or a bare alias / id) to the
-    model row, using the catalog's ``/models`` endpoint."""
+    model row, using the catalog's ``/mlmodels`` endpoint."""
     alias = ref.split(".", 1)[1] if "." in ref else ref
     project_alias = ref.split(".", 1)[0] if "." in ref else None
 
-    models = _catalog_get(client, "/models")
+    models = _catalog_get(client, "/mlmodels")
     if project_alias:
         project = next((p for p in client.projects.list() if p.get("alias") == project_alias), None)
         if project is None:
@@ -724,7 +724,7 @@ class TransformModel:
         from gwenlake.client import RequestOptions
 
         response = self._client._client.send(RequestOptions(
-            method="PATCH", url=f"/models/{self.id}",
+            method="PATCH", url=f"/mlmodels/{self.id}",
             headers={"Content-Type": "application/json"}, json_data=fields,
         ))
         response.raise_for_status()
