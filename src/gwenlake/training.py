@@ -222,11 +222,17 @@ class Run:
     """The state a training carries across its own interruptions."""
 
     def __init__(self, name: str, params: Dict[str, Any], *,
-                 steps: int, eval_every: int, work_dir: Optional[Path] = None,
+                 steps: Optional[int] = None, epochs: Optional[int] = None,
+                 eval_every: int = 1000, work_dir: Optional[Path] = None,
                  experiment: Optional[str] = None, model: str = "model",
                  tracking: bool = True, start_step: Optional[int] = None):
         self.name = name
+        #: A step budget, an epoch budget, or neither -- then the source
+        #: decides when it is done. Steps are what a resume counts in;
+        #: epochs are what you usually mean.
         self.total_steps = steps
+        self.total_epochs = epochs
+        self.epoch = 0
         self.eval_every = eval_every
         self.dir = Path(work_dir or os.environ.get(WORK_DIR_ENV) or f"./runs/{name}")
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -279,14 +285,19 @@ class Run:
         tmp.replace(p)      # atomic: a crash mid-write cannot corrupt it
 
     # --------------------------------------------------------------- loop --
-    def steps(self, batches: Iterable[Any]) -> Iterator[Tuple[int, Any]]:
+    def steps(self, batches: Any) -> Iterator[Tuple[int, Any]]:
         """Yield ``(step, batch)``, resuming and stopping on eviction.
 
-        Fast-forwards over the batches a previous life already consumed, so
-        the caller's loop reads the same whether it is a first run or the
-        fourth restart.
+        `batches` is an iterable, or -- when the run is measured in EPOCHS --
+        a callable returning a fresh one. A step is the unit that survives an
+        eviction, so it is what resumption counts in; an epoch is the unit
+        you actually mean, so it is what you declare. Both, in their place.
+
+        Fast-forwards over the batches a previous life already consumed,
+        across epoch boundaries, so the caller's loop reads the same whether
+        it is a first run or the fourth restart.
         """
-        if self.start_step >= self.total_steps:
+        if self.total_steps and self.start_step >= self.total_steps:
             # Doing nothing quietly is the worst of the three outcomes here:
             # the caller asked for fewer steps than a previous life already
             # ran, and would otherwise get a green run that trained nothing.
@@ -296,33 +307,56 @@ class Run:
                   flush=True)
             return
 
-        it = iter(batches)
-        for _ in range(self.start_step):
-            try:
-                next(it)
-            except StopIteration:
+        if self.total_epochs and not callable(batches):
+            raise TypeError(
+                "a run measured in epochs needs a callable returning a fresh "
+                "iterable (e.g. `run.steps(lambda: batches(data))`): an "
+                "exhausted iterator cannot be walked a second time")
+
+        step = self.start_step
+        skipping = self.start_step
+        epoch = 0
+        while True:
+            epoch += 1
+            if self.total_epochs and epoch > self.total_epochs:
+                break
+            self.epoch = epoch
+            it = iter(batches() if callable(batches) else batches)
+
+            exhausted = True
+            for batch in it:
+                exhausted = False
+                # Fast-forward what a previous life already consumed. Counted
+                # across epochs, so a resume lands in the right pass.
+                if skipping:
+                    skipping -= 1
+                    continue
+                step += 1
+                self.step = step
+                self.at_eval = (step % self.eval_every == 0
+                                or step == self.total_steps)
+                yield step, batch
+                if self._preemption.requested:
+                    # Deliberately NOT recording `step` here. The resume point
+                    # is the last CHECKPOINT, not the last step executed: the
+                    # two differ by up to eval_every, and resuming at the loop
+                    # position while loading older weights would silently drop
+                    # every update in between.
+                    self._write_state(preempted=True)
+                    self._tracker.close(status="KILLED")
+                    return
+                if self.total_steps and step >= self.total_steps:
+                    self._write_state(step=step, preempted=False)
+                    return
+
+            if exhausted:
+                # An empty source would otherwise spin forever on epochs.
+                break
+            if not self.total_epochs:
+                # No epoch budget: the source decides when it is done.
                 break
 
-        for step in range(self.start_step + 1, self.total_steps + 1):
-            try:
-                batch = next(it)
-            except StopIteration:
-                return
-            self.step = step
-            self.at_eval = (step % self.eval_every == 0) or step == self.total_steps
-            yield step, batch
-            if self._preemption.requested:
-                # Deliberately NOT recording `step` here. The resume point is
-                # the last CHECKPOINT, not the last step executed: the two
-                # differ by up to eval_every, and resuming at the loop
-                # position while loading older weights would silently drop
-                # every update in between. Losing that much recomputation is
-                # the honest cost; losing it invisibly is not.
-                self._write_state(preempted=True)
-                self._tracker.close(status="KILLED")
-                return
-
-        self._write_state(step=self.total_steps, preempted=False)
+        self._write_state(step=step, preempted=False)
 
     # ------------------------------------------------------------ tracking --
     def log(self, metrics: Dict[str, float]) -> None:
@@ -430,7 +464,8 @@ class Tracker:
             pass
 
 
-def train(*, steps: int, eval_every: int = 1000,
+def train(*, steps: Optional[int] = None, epochs: Optional[int] = None,
+          eval_every: int = 1000,
           model: str = "model", experiment: Optional[str] = None,
           run_name: Optional[str] = None, tracking: bool = True,
           params: Optional[Dict[str, Any]] = None,
@@ -492,10 +527,12 @@ def train(*, steps: int, eval_every: int = 1000,
         @functools.wraps(fn)
         def wrapper(client: Any, **overrides: Any) -> Any:
             run = Run(name=run_name,
-                      params={"steps": steps, "eval_every": eval_every,
+                      params={"steps": steps, "epochs": epochs,
+                              "eval_every": eval_every,
                               "model": model, **(params or {}),
                               **{k: str(v.ref) for k, v in bindings.items()}},
                       steps=overrides.pop("steps", steps),
+                      epochs=overrides.pop("epochs", epochs),
                       eval_every=overrides.pop("eval_every", eval_every),
                       experiment=experiment, model=model,
                       start_step=overrides.pop("start_step", None),
