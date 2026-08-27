@@ -502,6 +502,16 @@ def train(*, steps: int, eval_every: int = 1000,
                       # A run that must not touch the tracking server: the
                       # `--no-mlflow` of a command line, as a parameter.
                       tracking=overrides.pop("tracking", tracking))
+            if bindings and client is None:
+                # Otherwise the failure surfaces deep inside the catalog
+                # client as `'NoneType' has no attribute 'statements'`,
+                # which says nothing about what is actually missing.
+                raise RuntimeError(
+                    f"{fn.__name__} binds catalog datasets "
+                    f"({', '.join(sorted(bindings))}) but no client was "
+                    f"given: check ~/.gwenlake/credentials or "
+                    f"GWENLAKE_API_KEY")
+
             call: Dict[str, Any] = {"run": run}
             for name in signature:
                 if name in inputs:
@@ -655,4 +665,14 @@ def _cli() -> None:
     overrides = {k: v for k, v in (("steps", args.steps),
                                    ("eval_every", args.eval_every))
                  if v is not None}
-    entrypoint(args.path, function=args.function, **overrides)
+
+    # Built when it can be, passed as None when it cannot. A training whose
+    # data the platform mounts needs no catalog and must not be blocked by
+    # missing credentials; one that binds an Input does, and says so itself.
+    try:
+        from . import Gwenlake
+        client = Gwenlake()
+    except Exception:                                       # noqa: BLE001
+        client = None
+
+    entrypoint(args.path, client=client, function=args.function, **overrides)
