@@ -592,6 +592,34 @@ _SKIP = {".git", ".venv", "venv", "node_modules", "__pycache__", "build",
          "dist", "tests", "test", ".tox", ".mypy_cache", "site-packages"}
 
 
+def _module_name(base: Path, path: Path) -> tuple[str, str | None]:
+    """The dotted name a file should be imported under, and the root to add.
+
+    Importing a file under an invented name (``_gwenlake_scan_1234``) gives it
+    no parent package, so **every relative import inside it fails** --
+    ``attempted relative import with no known parent package``. A project laid
+    out as a package, which is what any real one looks like, is then skipped
+    module by module, and the training function is never found.
+
+    Walking up while ``__init__.py`` exists recovers the real name: a file at
+    ``src/pkg/sub/mod.py`` under a package is imported as ``pkg.sub.mod``, with
+    ``src`` added to ``sys.path`` so its siblings resolve. A loose script keeps
+    a scan-local name -- it has no package, so there is nothing to recover.
+    """
+    parts = [path.stem] if path.name != "__init__.py" else []
+    parent = path.parent
+    while (parent / "__init__.py").exists() and parent != base.parent:
+        parts.insert(0, parent.name)
+        parent = parent.parent
+    if not parts:
+        return f"_gwenlake_scan_{abs(hash(str(path)))}", None
+    if len(parts) == 1 and path.name != "__init__.py":
+        # Not inside a package: no relative import to satisfy, and a bare
+        # module name could collide with an installed one.
+        return f"_gwenlake_scan_{abs(hash(str(path)))}", None
+    return ".".join(parts), str(parent)
+
+
 def discover(root: str | Path = ".") -> Dict[str, Callable]:
     """Every ``@train``-decorated function in a project, by name.
 
@@ -620,13 +648,21 @@ def discover(root: str | Path = ".") -> Dict[str, Callable]:
                 continue
             if path.name.startswith("_") and path.name != "__init__.py":
                 continue
-            name = f"_gwenlake_scan_{abs(hash(str(path)))}"
+            name, extra_path = _module_name(base, path)
             try:
-                spec = importlib.util.spec_from_file_location(name, path)
+                spec = importlib.util.spec_from_file_location(
+                    name, path,
+                    submodule_search_locations=[str(path.parent)]
+                    if path.name == "__init__.py" else None,
+                )
                 if spec is None or spec.loader is None:
                     continue
                 module = importlib.util.module_from_spec(spec)
                 sys.modules[name] = module
+                # The package's own root on `sys.path`, so a module reached by
+                # its dotted name can import its siblings.
+                if extra_path and extra_path not in sys.path:
+                    sys.path.insert(0, extra_path)
                 spec.loader.exec_module(module)
             except Exception as e:                          # noqa: BLE001
                 # A module that will not import is not necessarily the one
