@@ -58,7 +58,10 @@ never take a training down with it.
 from __future__ import annotations
 
 import json
+import contextlib
+import math
 import os
+import shutil
 import signal
 import time
 from contextlib import contextmanager
@@ -81,6 +84,10 @@ __all__ = ["train", "entrypoint", "discover", "Run", "Tracker",
 
 STATE_FILE = "run-state.json"
 RUN_ID_FILE = "mlflow-run-id"
+
+BEST_LINK = "best"
+
+STEP_DIR_PREFIX = "step-"
 ENV_FILE = ".env"
 #: The tracking server belongs to the project, not to each workstation's
 #: setup. MLFLOW_TRACKING_URI still wins when it is set.
@@ -209,6 +216,7 @@ class _Checkpoint:
         self._run, self.step = run, step
         self.metrics: Dict[str, float] = {}
         self.written: list[Path] = []
+        self.best: bool = False
 
     def path(self, name: str) -> Path:
         """A path to write to, inside this run's directory."""
@@ -216,6 +224,20 @@ class _Checkpoint:
         p.parent.mkdir(parents=True, exist_ok=True)
         self.written.append(p)
         return p
+
+    def track(self, *paths: Any) -> None:
+        """Declare files this checkpoint wrote by other means.
+
+        `path()` covers what the caller writes itself, but a project that
+        hands the writing to its own helper -- `save_state(...)` returning
+        where it put things -- has files nothing knows about. They would then
+        be neither shipped to the tracker nor copied under `best/`, and the
+        omission is silent: the run succeeds, and the best checkpoint is an
+        empty directory.
+        """
+        for p in paths:
+            if p is not None:
+                self.written.append(Path(p))
 
 
 class Run:
@@ -285,6 +307,27 @@ class Run:
         tmp.replace(p)      # atomic: a crash mid-write cannot corrupt it
 
     # --------------------------------------------------------------- loop --
+    def steps_for(self, rows: int, batch_size: int) -> int:
+        """How many steps cover this run's epochs over `rows` documents.
+
+        For the training loops that count in STEPS -- most libraries do, since
+        their stream loops forever and the step count is what ends a run --
+        while the caller means epochs. "Go over the dataset twice" is the
+        intention; 62,500 is an arithmetic consequence of it, and one that
+        silently stops meaning the same thing the moment the batch size or the
+        dataset changes.
+
+        Falls back to this run's own step budget when it is measured in steps,
+        so a caller can ask without first checking which unit was declared.
+        """
+        if not self.total_epochs:
+            return self.total_steps or 0
+        if rows <= 0 or batch_size <= 0:
+            raise ValueError(
+                f"cannot turn {self.total_epochs} epoch(s) into steps with "
+                f"rows={rows} and batch_size={batch_size}")
+        return max(1, math.ceil(self.total_epochs * rows / batch_size))
+
     def steps(self, batches: Any) -> Iterator[Tuple[int, Any]]:
         """Yield ``(step, batch)``, resuming and stopping on eviction.
 
@@ -364,12 +407,20 @@ class Run:
         self._tracker.log(metrics, self.step)
 
     @contextmanager
-    def checkpoint(self) -> Iterator[_Checkpoint]:
+    def checkpoint(self, keep: int = 0) -> Iterator[_Checkpoint]:
         """Write a checkpoint, and ship it.
 
         Uploads on exit rather than at the end of training: a run that is
         evicted never reaches the end, and the directory written to is
         usually node-local.
+
+        ``keep`` bounds how many step directories survive -- a long run fills
+        a node-local disk otherwise, and the failure surfaces as a training
+        that cannot write rather than as a disk alarm. 0 keeps everything.
+
+        Set ``ck.best = True`` when this checkpoint beats the previous ones:
+        it is then also written under :data:`BEST_LINK`, so restoring "the
+        good one" does not mean parsing filenames.
         """
         ck = _Checkpoint(self, self.step)
         yield ck
@@ -379,6 +430,31 @@ class Run:
         self._write_state(step=ck.step, metrics=ck.metrics)
         for p in ck.written:
             self._tracker.artifact(p)
+        if ck.best:
+            self._mark_best(ck)
+        self._prune(keep)
+
+    def _mark_best(self, ck: "_Checkpoint") -> None:
+        """Copy this checkpoint's files under `best/`.
+
+        Copied, not linked: `best` has to survive the pruning that removes the
+        step it came from, and a dangling link is worse than no link -- it
+        reads as "there is a best" right up to the moment it is opened.
+        """
+        best = self.dir / BEST_LINK
+        best.mkdir(parents=True, exist_ok=True)
+        for written in ck.written:
+            with contextlib.suppress(OSError):
+                shutil.copy2(written, best / written.name)
+
+    def _prune(self, keep: int) -> None:
+        """Keep only the `keep` most recent step directories."""
+        if keep <= 0:
+            return
+        steps = sorted(d for d in self.dir.glob(f"{STEP_DIR_PREFIX}*")
+                       if d.is_dir())
+        for stale in steps[:-keep]:
+            shutil.rmtree(stale, ignore_errors=True)
 
     def summary(self) -> Dict[str, Any]:
         """What the decorator stores on the model as its metrics."""
@@ -386,6 +462,47 @@ class Run:
                 "steps": self.step,
                 "elapsed_s": round(time.monotonic() - self._started, 1),
                 "preempted": self._preemption.requested}
+
+
+def _is_platform(uri: str) -> bool:
+    """Whether this tracking server is the platform's own.
+
+    A key is only ever handed to Gwenlake: sending it to a tracking server
+    somebody else runs would leak it, so the check is on the host, not on the
+    path.
+    """
+    from urllib.parse import urlparse
+
+    host = (urlparse(uri).hostname or "").lower()
+    # Le suffixe, avec son point : `gwenlake.com` et `*.gwenlake.com`, mais
+    # jamais `gwenlake.com.autrechose.net`, qui se termine ailleurs.
+    if host == "gwenlake.com" or host.endswith(".gwenlake.com"):
+        return True
+    # Le service interne du cluster. Nommé en entier : un `startswith` laisserait
+    # passer `mlflow-service.ailleurs.net`, et la clé partirait avec.
+    return host.endswith(".svc.cluster.local") and host.startswith("mlflow-service.")
+
+
+def _platform_key() -> Optional[str]:
+    """The caller's Gwenlake key, from the environment or the credentials file.
+
+    Read lazily and never stored: this is the same key the client uses, so
+    tracking works wherever the SDK already does -- a laptop with
+    `~/.gwenlake/credentials`, a CI job with `GWENLAKE_API_KEY`.
+    """
+    key = os.environ.get("GWENLAKE_API_KEY")
+    if key:
+        return key
+    try:
+        from .credentials import Credentials
+
+        credentials = Credentials.from_profile(
+            os.environ.get("GWENLAKE_PROFILE", "default"))
+        return credentials.token if credentials else None
+    except Exception:                                         # noqa: BLE001
+        # Tracking is an enhancement: failing to find a key must not be what
+        # stops a training from running.
+        return None
 
 
 class Tracker:
@@ -404,9 +521,17 @@ class Tracker:
         # first call rather than a trace.
         if uri.startswith("http") and not any(os.environ.get(v)
                                               for v in CREDENTIAL_VARS):
-            print(f"gwenlake: no {CREDENTIAL_VARS[0]} in the environment or "
-                  f"in {ENV_FILE}: tracking off", flush=True)
-            return
+            # The platform's own tracking server takes the platform's own key.
+            # Asking for a second credential to reach a service the caller is
+            # already authenticated against makes tracking an opt-in chore, and
+            # a run whose metrics went nowhere is the usual outcome.
+            key = _platform_key()
+            if key and _is_platform(uri):
+                os.environ["MLFLOW_TRACKING_TOKEN"] = key
+            else:
+                print(f"gwenlake: no {CREDENTIAL_VARS[0]} in the environment or "
+                      f"in {ENV_FILE}: tracking off", flush=True)
+                return
         try:
             import mlflow
         except ImportError:
@@ -464,18 +589,62 @@ class Tracker:
             pass
 
 
+#: Le nom de liaison qui designe ce que l entrainement PRODUIT. Tout le reste
+#: est lu. Une seule sortie : un entrainement produit un modele, pas deux.
+OUTPUT_BINDING = "output"
+
+
+def _as_refs(bindings: Dict[str, Any]) -> Dict[str, Any]:
+    """Turn plain strings into the Input/Output they obviously mean.
+
+    ``train="proj.dataset"`` reads better than ``train=Input("proj.dataset")``
+    and says the same thing. The key decides the direction: ``output`` is what
+    the training produces, everything else is what it reads -- so the common
+    case carries no wrapper at all.
+
+    The explicit form still works, and must: a project already declaring
+    ``Input(...)`` / ``Output(...)`` keeps running unchanged, and it stays the
+    way to pass read options (``columns``, ``chunk_size``) that a bare string
+    cannot express.
+    """
+    Input, _Model, Output, _TI, _TM, _split = _bindings()
+    resolved: Dict[str, Any] = {}
+    for name, value in bindings.items():
+        if isinstance(value, str):
+            resolved[name] = (Output if name == OUTPUT_BINDING else Input)(value)
+        else:
+            resolved[name] = value
+    return resolved
+
+
 def train(*, steps: Optional[int] = None, epochs: Optional[int] = None,
           eval_every: int = 1000,
           model: str = "model", experiment: Optional[str] = None,
           run_name: Optional[str] = None, tracking: bool = True,
           params: Optional[Dict[str, Any]] = None,
           **bindings: Any) -> Callable:
-    """Decorate a function that trains a model on the GPU pool.
+    """Decorate a function that trains a model.
 
-    Catalog bindings are optional. Without them the decorated function
-    receives only ``run``, which is the shape a project whose data the
-    platform mounts will want; with them it also receives its ``Input`` and
-    ``Output``, and the returned metrics land on the model.
+    The same function runs on your machine and on the GPU pool. Nothing in it
+    says where the data comes from or where the training happens::
+
+        @train(train="proj.trainset", test="proj.testset", output="proj.model")
+        def fit(train, test, output, run):
+            for step, batch in run.steps(lambda: batches(train)):
+                ...
+            output.save("checkpoints/")     # back to the platform
+
+    Bindings are plain strings, and the keyword says the direction: ``output``
+    is what the training PRODUCES, everything else is what it reads. The
+    explicit ``Input(...)`` / ``Output(...)`` form still works and is what to
+    reach for when a read needs options (``columns``, ``chunk_size``).
+
+    Inputs arrive as :class:`TransformInput` -- a handle, not a DataFrame: a
+    training set is streamed, not loaded, which is what lets a million rows
+    train on a laptop. Call ``.dataframe()`` when it does fit in memory.
+
+    Bindings stay optional: without them the function receives only ``run``,
+    which is the shape a project whose data the platform mounts will want.
 
     ``params`` carries the hyperparameters worth recording alongside the
     run -- everything the tracker should show next to its metrics.
@@ -503,6 +672,7 @@ def train(*, steps: Optional[int] = None, epochs: Optional[int] = None,
     # to begin with.
     if bindings:
         _, _, _, TransformInput, TransformModel, _split = _bindings()
+        bindings = _as_refs(bindings)
         inputs, outputs, models = _split(bindings)
         if len(outputs) > 1:
             raise TypeError(
@@ -620,6 +790,18 @@ def _module_name(base: Path, path: Path) -> tuple[str, str | None]:
     return ".".join(parts), str(parent)
 
 
+def _origin(fn: Any) -> str:
+    """Where a decorated function was defined, for a message that helps."""
+    import inspect
+
+    # `__wrapped__` first: the decorator's wrapper lives in this file, so
+    # asking about it would name the library rather than the user's project.
+    try:
+        return inspect.getfile(getattr(fn, "__wrapped__", fn))
+    except Exception:                                         # noqa: BLE001
+        return getattr(fn, "__module__", "?")
+
+
 def discover(root: str | Path = ".") -> Dict[str, Callable]:
     """Every ``@train``-decorated function in a project, by name.
 
@@ -671,8 +853,20 @@ def discover(root: str | Path = ".") -> Dict[str, Callable]:
                       f"({e.__class__.__name__}: {e})", flush=True)
                 continue
             for attr in vars(module).values():
-                if callable(attr) and getattr(attr, "is_training", False):
-                    found.setdefault(attr.__name__, attr)
+                if not (callable(attr) and getattr(attr, "is_training", False)):
+                    continue
+                previous = found.get(attr.__name__)
+                if previous is not None and previous is not attr:
+                    # Two trainings of the same name: one of them was about to
+                    # be dropped, and the run would have trained the wrong
+                    # model while reporting the name the caller asked for.
+                    # Said out loud, because nothing downstream can tell.
+                    print(f"gwenlake: two trainings named '{attr.__name__}' "
+                          f"({_origin(previous)} and {path.relative_to(root)}); "
+                          f"keeping the first -- rename one, or pass "
+                          f"--function", flush=True)
+                    continue
+                found[attr.__name__] = attr
     return found
 
 
