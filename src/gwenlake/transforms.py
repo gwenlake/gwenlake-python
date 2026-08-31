@@ -55,6 +55,7 @@ handful of a few hundred columns::
 import functools
 import inspect
 import io
+import contextlib
 import os
 import re
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
@@ -190,6 +191,16 @@ def _sql_table(client: Any, ref: str) -> str:
     handle = ref if "." in ref else _ref_to_sql_table(client, ref)
     branch = _catalog_branch()
     return f"{handle}:{branch}" if branch else handle
+
+
+def _require_pyarrow_parquet():
+    """`pyarrow.parquet`, or a message naming what to install."""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as e:                                  # pragma: no cover
+        raise GwenlakeException(
+            "writing Parquet needs pyarrow (pip install pyarrow)") from e
+    return pq
 
 
 def _require_pyarrow():
@@ -470,6 +481,9 @@ class TransformInput:
         self._client = client
         self.ref = ref
         self._dataset_id: Optional[str] = None
+        #: Compté à la demande, puis gardé : la taille d'un jeu ne bouge pas
+        #: pendant un entraînement, et `epochs` la redemanderait à chaque époque.
+        self._rows: Optional[int] = None
         # Defaults from the binding (`Input(..., columns=[...])`), overridable
         # per call.
         self.columns = list(columns) if columns is not None else None
@@ -520,6 +534,142 @@ class TransformInput:
             self.columns if columns is None else columns,
             self.order_by if order_by is None else order_by,
         )
+
+    def batches(
+        self,
+        size: int = 32,
+        *,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = None,
+        order_by: Optional[str] = None,
+    ) -> Callable[[], Iterator[Any]]:
+        """Training batches of ``size`` rows, ready for :meth:`Run.steps`::
+
+            for step, batch in run.steps(train.batches(32)):
+
+        Returns a CALLABLE, not a generator, and that is the point: an epoch
+        ends when the source runs out, and an exhausted iterator cannot be
+        walked again. `run.steps` calls this once per epoch to get a fresh
+        pass, which a generator handed in directly could never give.
+
+        Two sizes, doing different jobs: ``chunk_size`` is how many rows come
+        back per request -- large, because round trips dominate -- and ``size``
+        is how many rows the model sees at once. Slicing the pages locally is
+        what lets those two be chosen independently.
+        """
+        page_rows = chunk_size or self.chunk_size or DEFAULT_CHUNK_SIZE
+
+        def pass_over() -> Iterator[Any]:
+            for page in self.iter_dataframes(
+                columns=columns, chunk_size=page_rows, order_by=order_by,
+            ):
+                for start in range(0, len(page), size):
+                    batch = page.iloc[start:start + size]
+                    if len(batch):
+                        yield batch
+
+        return pass_over
+
+    @property
+    def rows(self) -> int:
+        """How many rows the dataset holds.
+
+        Counted server-side, so it costs one query and no transfer -- which is
+        what makes it usable to turn "two epochs" into a step budget without
+        reading the data first.
+        """
+        if self._rows is None:
+            # Même forme que la lecture paginée : la ref EST le nom de table.
+            table = _run_arrow(
+                self._client, f"SELECT COUNT(*) AS n FROM '{self.ref}'")
+            self._rows = int(table.column("n")[0].as_py()) if table.num_rows else 0
+        return self._rows
+
+    def __len__(self) -> int:
+        return self.rows
+
+    def to_parquet(
+        self,
+        destination: Any,
+        *,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = None,
+        reuse: bool = True,
+        attempts: int = 3,
+    ) -> int:
+        """Write the dataset to a local Parquet file. Returns the row count.
+
+        For the training libraries that read FILES rather than a stream --
+        anything that shuffles by permuting row groups, which a paged source
+        cannot offer. Streaming stays the better path when the loop can take
+        it (see :meth:`batches`); this is for when it cannot.
+
+        Written to a temporary name and renamed at the end, so **a file that
+        exists is a file that is complete**. Reading a million rows takes
+        dozens of requests, and one dropping mid-way otherwise leaves a
+        perfectly readable Parquet holding a fraction of the data -- which the
+        next attempt believes is the whole dataset, and trains on it without
+        anything saying so.
+
+        ``reuse`` keeps an existing complete file: that is what makes a
+        resumed run skip the download instead of paying for it again.
+
+        Retried as a WHOLE rather than resumed: reading a million rows takes
+        dozens of requests, and one dropping in the middle -- a
+        `RemoteProtocolError`, a gateway recycling a connection -- is common
+        enough to lose a staging over. A paged read has no cursor to restart
+        from, and re-reading costs far less than a training that dies at
+        minute six.
+        """
+        from pathlib import Path
+
+        pq = _require_pyarrow_parquet()
+
+        target = Path(destination)
+        if reuse and target.exists():
+            return int(pq.ParquetFile(target).metadata.num_rows)
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_suffix(target.suffix + ".partial")
+        last: Optional[BaseException] = None
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                return self._write_parquet(partial, target, columns, chunk_size)
+            except (GwenlakeException, KeyboardInterrupt):
+                raise
+            except BaseException as e:                        # noqa: BLE001
+                last = e
+                print(f"gwenlake: staging {target.name}: attempt {attempt}/"
+                      f"{attempts} failed ({type(e).__name__}: {e})", flush=True)
+        raise GwenlakeException(
+            f"could not stage '{self.ref}' after {attempts} attempts") from last
+
+    def _write_parquet(self, partial, target, columns, chunk_size) -> int:
+        """One attempt: write every page, then rename into place."""
+        pq = _require_pyarrow_parquet()
+        pa = _require_pyarrow()
+        writer, rows = None, 0
+        try:
+            for page in self.iter_dataframes(columns=columns, chunk_size=chunk_size):
+                table = pa.Table.from_pandas(page, preserve_index=False)
+                if writer is None:
+                    # One row group per page -- that is the unit a shuffle
+                    # permutes, so there had better be several of them.
+                    writer = pq.ParquetWriter(partial, table.schema)
+                writer.write_table(table)
+                rows += len(page)
+            if writer is None:
+                raise GwenlakeException(f"'{self.ref}' returned no row at all")
+            writer.close()
+            writer = None
+            partial.replace(target)
+            return rows
+        except BaseException:
+            if writer is not None:
+                with contextlib.suppress(Exception):
+                    writer.close()
+            partial.unlink(missing_ok=True)
+            raise
 
     def filesystem(self) -> FileSystem:
         return FileSystem(self._client, self.dataset_id)
@@ -662,6 +812,9 @@ def _catalog_get(client: Any, url: str) -> List[Dict[str, Any]]:
     return response.json().get("data", [])
 
 
+MAX_COMMIT_BYTES = 95_000_000
+
+
 class TransformModel:
     """A model bound to a transform — its artifacts on disk, plus its card.
 
@@ -736,14 +889,120 @@ class TransformModel:
         artifact (``model.file("model.pkl")``)."""
         return os.path.join(self.path, *parts)
 
+    def save(self, source: str, message: Optional[str] = None) -> Dict[str, Any]:
+        """Send trained artifacts to the platform, and pin the model to them.
+
+        ``source`` is a file or a directory; its contents land under the
+        model's own ``path`` in the repository the model belongs to. A model's
+        artifacts live in git -- that is what makes a version a commit, and a
+        commit something you can go back to -- so this commits and pushes.
+
+        This is the step a run on the GPU pool does NOT need: there the build
+        engine commits whatever the script wrote under ``path``. Training on
+        your own machine has no engine behind it, so the upload is explicit.
+
+        Binary weights are carried base64; text files are sent as text so a
+        diff on the repository stays readable.
+        """
+        import base64
+        from pathlib import Path
+
+        from gwenlake.client import RequestOptions
+
+        root = Path(source)
+        if not root.exists():
+            raise GwenlakeException(f"nothing to save at '{source}'")
+        files = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else [root]
+        if not files:
+            raise GwenlakeException(f"'{source}' holds no file to save")
+
+        info = self.info()
+        repository_id = info.get("repository_id")
+        if not repository_id:
+            raise GwenlakeException(
+                f"model '{self.ref}' has no repository: its artifacts have "
+                "nowhere to live")
+        base = (info.get("path") or "").strip("/")
+
+        changes = []
+        for path in files:
+            relative = path.name if root.is_file() else str(path.relative_to(root))
+            raw = path.read_bytes()
+            try:
+                changes.append({
+                    "path": f"{base}/{relative}" if base else relative,
+                    "operation": "upsert",
+                    "content": raw.decode("utf-8"),
+                    "encoding": "utf-8",
+                })
+            except UnicodeDecodeError:
+                changes.append({
+                    "path": f"{base}/{relative}" if base else relative,
+                    "operation": "upsert",
+                    "content": base64.b64encode(raw).decode("ascii"),
+                    "encoding": "base64",
+                })
+
+        taille = sum(len(c["content"]) for c in changes)
+        if taille > MAX_COMMIT_BYTES:
+            gros = sorted(files, key=lambda f: f.stat().st_size, reverse=True)[:3]
+            raise GwenlakeException(
+                f"{taille / 1e6:.0f} MB encoded, over the {MAX_COMMIT_BYTES / 1e6:.0f} MB "
+                f"a git commit accepts. Largest: "
+                + ", ".join(f"{f.name} ({f.stat().st_size / 1e6:.0f} MB)" for f in gros)
+                + ". Save the weights alone rather than the full training state "
+                  "(the optimiser is usually the bulk of it), or keep the big "
+                  "artifacts in object storage and commit a pointer.")
+
+        response = self._client._client.send(RequestOptions(
+            method="POST", url=f"/git/{repository_id}/commit",
+            headers={"Content-Type": "application/json"},
+            json_data={
+                "ref": info.get("branch") or "main",
+                "message": message or f"train: {self.ref}",
+                "changes": changes,
+            },
+        ))
+        response.raise_for_status()
+        commit = response.json()
+        # The commit IS the version: a model card pointing at a sha is a model
+        # you can rebuild, where one pointing at a timestamp is not.
+        with contextlib.suppress(Exception):
+            self.update(version=commit.get("commit"))
+        return commit
+
 
 # ---------------------------------------------------------------------------
 # Decorators
 # ---------------------------------------------------------------------------
 
+OUTPUT_KEYWORD = "output"
+
+
+def as_refs(bindings: Dict[str, Any]) -> Dict[str, Any]:
+    """Turn plain strings into the Input/Output they obviously mean.
+
+    ``output="crm.clean"`` reads better than ``output=Output("crm.clean")`` and
+    says the same thing. The keyword decides the direction: ``output`` is what
+    the function produces, everything else is what it reads.
+
+    The explicit form still works, and must -- it is how read options
+    (``columns``, ``chunk_size``) and ``Model(...)`` are expressed, which a
+    bare string cannot carry.
+    """
+    resolved: Dict[str, Any] = {}
+    for name, value in bindings.items():
+        if isinstance(value, str):
+            resolved[name] = (Output if name == OUTPUT_KEYWORD else Input)(value)
+        else:
+            resolved[name] = value
+    return resolved
+
+
 def _split_bindings(
-    bindings: Dict[str, _DatasetRef],
+    bindings: Dict[str, Any],
 ) -> Tuple[Dict[str, Input], Dict[str, Output], Dict[str, Model]]:
+    bindings = as_refs(bindings)
     inputs = {k: v for k, v in bindings.items() if isinstance(v, Input)}
     outputs = {k: v for k, v in bindings.items() if isinstance(v, Output)}
     models = {k: v for k, v in bindings.items() if isinstance(v, Model)}
@@ -753,7 +1012,7 @@ def _split_bindings(
     return inputs, outputs, models
 
 
-def transform_df(**bindings: _DatasetRef) -> Callable:
+def transform_df(**bindings: Any) -> Callable:
     """Decorate a function that takes ``Input`` DataFrames (by keyword name) and
     returns a single DataFrame, written to the (single) ``Output``.
 
@@ -796,7 +1055,7 @@ def transform_df(**bindings: _DatasetRef) -> Callable:
     return decorator
 
 
-def transform(**bindings: _DatasetRef) -> Callable:
+def transform(**bindings: Any) -> Callable:
     """Decorate a function that takes ``TransformInput`` / ``TransformOutput``
     objects (by keyword name). The body is responsible for reading
     (``.dataframe()`` / ``.filesystem()``) and writing (``.write_dataframe()`` /
