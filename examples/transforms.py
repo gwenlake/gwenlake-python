@@ -5,7 +5,7 @@ Uses the default credentials (GWENLAKE_API_KEY env var or the ``default`` profil
 """
 
 import gwenlake
-from gwenlake.transforms import transform_df, transform, train, Input, Model, Output
+from gwenlake.transforms import transform_df, transform, train, Input, Model, Output, Connection
 
 client = gwenlake.Gwenlake()  # default credentials
 
@@ -74,6 +74,22 @@ if __name__ == "__main__":
     dedupe_users(client)
     process_files(client)
     transform_in_chunks(client)
+
+
+# 3b) A connection as the source: the transform walks the share itself —
+#     selects the files it wants, keeps their tree in the output — instead of
+#     having a sync copy everything first. Read-only, through the catalog.
+@transform(
+    share=Connection("Project_A.drop-folder"),
+    out=Output("Project_A.collected"),
+)
+def collect_reports(share, out):
+    import shutil
+
+    fs_in, fs_out = share.filesystem(), out.filesystem()
+    for f in fs_in.ls(glob="**/*.pdf"):
+        with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
+            shutil.copyfileobj(src, dst)
 
 
 # 4) train: the Output is a MODEL, not a dataset. The body writes the fitted
