@@ -160,6 +160,39 @@ def process_files(images, thumbnails):
             f.write(data)
 ```
 
+### Connections
+
+A **connection** is a datasource a project declares once (an SMB share, a
+bucket, a SharePoint library). A `file` sync copies what it holds into a
+dataset; a transform that declares the connection as a `Connection(...)` input
+reads it **itself** — walks the directory, picks the files it wants, lays its
+output out as it likes. `.filesystem()` is read-only and goes through the
+catalog as the build's own identity, so the connection's credentials never
+reach the code:
+
+```python
+import shutil
+from gwenlake.transforms import transform, Connection, Output
+
+@transform(
+    share=Connection("Ops.drop-folder"),          # "<project>.<connection slug>"
+    out=Output("Ops.collected"),
+)
+def collect(share, out):
+    fs_in, fs_out = share.filesystem(), out.filesystem()
+    for f in fs_in.ls(glob="**/*.pdf"):           # f["path"] = "2024/q3/report.pdf"
+        with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
+            shutil.copyfileobj(src, dst)
+```
+
+`ls(path=, glob=)` lists recursively (paths relative to the connection's root;
+`*` stays within a directory, `**` descends — the same rule as a sync's
+`path_glob`), `read(path)` / `open(path, "rb")` fetch one file. The dataset
+`FileSystem.ls` takes the same `glob=` so an output can be walked the same way.
+The catalog scanner reads `Connection(...)` like `Input(...)`, so the lineage
+shows the connection feeding the output. `client.connections` exposes the
+same calls directly (`list`, `get`, `list_files`, `iter_files`, `download`).
+
 ### Models
 
 A **model** is a catalog resource whose artifacts live in the git repository the

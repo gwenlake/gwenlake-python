@@ -35,6 +35,22 @@ A third reference, ``Model("<project>.<model>")``, binds a model a transform
 ``TransformModel`` whose ``path`` points at the artifacts on disk. Models live
 in the same repository as the code that trains or predicts with them.
 
+A fourth, ``Connection("<project>.<connection>")``, binds a **connection** —
+an SMB share, a bucket, a SharePoint library — the transform reads *itself*,
+instead of having a sync copy it first. It arrives as a ``TransformConnection``
+whose ``.filesystem()`` walks the source (read-only) through the catalog, so
+the connection's credentials never reach the code::
+
+    @transform(
+        share=Connection("ops.drop-folder"),
+        out=Output("ops.collected"),
+    )
+    def collect(share, out):
+        fs_in, fs_out = share.filesystem(), out.filesystem()
+        for f in fs_in.ls(glob="**/*.pdf"):
+            with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
 Datasets are addressed as ``"<project_alias>.<dataset_alias>"`` — the same
 handle DuckDB uses in ``FROM '<project>.<dataset>'``. A bare string with no dot
 is treated as a dataset alias (searched across datasets) or, failing that, as a
@@ -130,6 +146,18 @@ class Model(_DatasetRef):
     """
 
 
+class Connection(_DatasetRef):
+    """References a connection the transform reads, e.g.
+    ``Connection("ops.drop-folder")`` — a ``"<project>.<connection slug>"`` ref
+    or a ``res.connection.*`` id.
+
+    The decorated function receives a :class:`TransformConnection`; its
+    ``.filesystem()`` lists and opens the files the connection holds, through
+    the catalog and as the build's own identity. In a catalog build the engine
+    exports ``CATALOG_CONNECTIONS`` (slug → id), so no lookup is needed.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Resolution & IO helpers
 # ---------------------------------------------------------------------------
@@ -151,6 +179,72 @@ def _resolve_dataset_id(client: Any, ref: str) -> str:
     # No dot: try as a dataset alias across all datasets, else assume it's an id.
     match = next((d for d in client.datasets.list() if d.get("alias") == ref), None)
     return match["id"] if match else ref
+
+
+def _catalog_connections() -> Dict[str, str]:
+    """``CATALOG_CONNECTIONS`` as the build engine exports it: ``{slug: id}``
+    for every connection the transform resource declares as an input. Empty
+    outside a build."""
+    import json
+
+    raw = os.environ.get("CATALOG_CONNECTIONS", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _resolve_connection_id(client: Any, ref: str) -> str:
+    """Resolve ``"<project>.<slug>"`` (or a bare slug / id) to a connection id:
+    the build's ``CATALOG_CONNECTIONS`` first, else the catalog's listing."""
+    if ref.startswith("res.connection."):
+        return ref
+    slug = ref.split(".", 1)[1] if "." in ref else ref
+    exported = _catalog_connections()
+    if slug in exported:
+        return exported[slug]
+    rows = client.connections.list()
+    if "." in ref:
+        project_slug = ref.split(".", 1)[0]
+        project = next(
+            (p for p in client.projects.list() if (p.get("slug") or p.get("alias")) == project_slug), None,
+        )
+        if project is None:
+            raise GwenlakeException(f"No project '{project_slug}' (in ref '{ref}')")
+        rows = [c for c in rows if c.get("project_id") == project["id"]]
+    match = next((c for c in rows if (c.get("slug") or c.get("alias")) == slug or c.get("id") == ref), None)
+    if match is None:
+        raise GwenlakeException(f"No connection '{ref}' in the catalog")
+    return match["id"]
+
+
+def _glob_regex(pattern: str) -> "re.Pattern[str]":
+    """A glob as a regex over a relative path, with path semantics: ``*`` and
+    ``?`` stay within one directory, ``**`` crosses into subdirectories (the
+    rule the catalog's own file matching follows)."""
+    out = []
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+            continue
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            continue
+        if c == "*":
+            out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return re.compile(r"\A" + "".join(out) + r"\Z")
 
 
 def _require_pandas():
@@ -406,9 +500,34 @@ class FileSystem:
         self._client = client
         self._dataset_id = dataset_id
 
-    def ls(self, path: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List files in the dataset (optionally under ``path``)."""
-        return self._client.files.list(self._dataset_id, path=path)
+    def ls(self, path: Optional[str] = None, *, glob: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List files in the dataset (optionally under ``path``).
+
+        Without ``glob``, the entries of that one directory, as the catalog
+        lists them. With ``glob``, the **files** matching it — ``*`` within a
+        directory, ``**`` across, so ``ls(glob="**/*.pdf")`` walks the whole
+        dataset — each with a ``path`` relative to the dataset's root, the same
+        value :meth:`read`/:meth:`open` take.
+        """
+        entries = self._client.files.list(self._dataset_id, path=path)
+        if glob is None:
+            return entries
+        return list(self._walk(path, entries, _glob_regex(glob), recursive="**" in glob))
+
+    def _walk(self, path, entries, selector, *, recursive):
+        for entry in entries or []:
+            filepath = _entry_path(entry)
+            if not filepath or filepath.rstrip("/") == (path or "").rstrip("/"):
+                continue
+            if _is_directory(entry):
+                if recursive:
+                    sub = filepath.rstrip("/")
+                    yield from self._walk(
+                        sub, self._client.files.list(self._dataset_id, path=sub), selector, recursive=True,
+                    )
+                continue
+            if selector.search(filepath):
+                yield {**entry, "path": filepath, "filename": filepath.rsplit("/", 1)[-1]}
 
     # Foundry alias
     files = ls
@@ -761,6 +880,89 @@ class TransformOutput:
 
 
 # ---------------------------------------------------------------------------
+# Connections (sources a transform walks itself)
+# ---------------------------------------------------------------------------
+
+class ConnectionFileSystem:
+    """Read-only file access to what a connection holds, through the catalog.
+
+    Same surface as :class:`FileSystem` for reading — ``ls`` / ``read`` /
+    ``open`` — so a body copying from a connection into an output reads
+    naturally::
+
+        for f in fs_in.ls(glob="**/*.pdf"):
+            with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+    Listings are recursive (every file source lists that way) and paged by the
+    catalog; ``ls`` follows the pages to the end. Paths are relative to the
+    connection's root. There is no ``write``: a connection is a source.
+    """
+
+    def __init__(self, client: Any, connection_id: str):
+        self._client = client
+        self._connection_id = connection_id
+
+    def ls(self, path: Optional[str] = None, *, glob: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Every file under ``path`` (the whole connection when omitted),
+        optionally only those matching ``glob`` (``*`` within a directory,
+        ``**`` across). Each entry has ``path``, ``filename``, ``size`` and
+        ``last_modified``."""
+        return list(self._client.connections.iter_files(self._connection_id, path=path, glob=glob))
+
+    files = ls
+
+    def read(self, filepath: str) -> bytes:
+        return self._client.connections.download(self._connection_id, filepath)
+
+    def open(self, filepath: str, mode: str = "rb"):
+        """A ``BytesIO`` of the file. Write modes are refused: a connection is
+        read-only from a transform — write into the output's filesystem."""
+        if "w" in mode or "a" in mode or "+" in mode:
+            raise GwenlakeException(
+                f"a connection is read-only: cannot open {filepath!r} for writing — "
+                "write into the transform's Output instead"
+            )
+        return io.BytesIO(self.read(filepath))
+
+    def write(self, *args: Any, **kwargs: Any) -> None:
+        raise GwenlakeException("a connection is read-only: write into the transform's Output instead")
+
+
+class TransformConnection:
+    """A connection bound to a transform. ``.filesystem()`` walks its files;
+    ``.info()`` is the connection row (type, configuration without credentials)."""
+
+    def __init__(self, client: Any, ref: str):
+        self._client = client
+        self.ref = ref
+        self._connection_id: Optional[str] = None
+        self._info: Optional[Dict[str, Any]] = None
+
+    @property
+    def connection_id(self) -> str:
+        if self._connection_id is None:
+            self._connection_id = _resolve_connection_id(self._client, self.ref)
+        return self._connection_id
+
+    @property
+    def id(self) -> str:
+        return self.connection_id
+
+    def info(self) -> Dict[str, Any]:
+        if self._info is None:
+            self._info = self._client.connections.get(self.connection_id)
+        return self._info
+
+    @property
+    def type(self) -> Optional[str]:
+        return self.info().get("type")
+
+    def filesystem(self) -> ConnectionFileSystem:
+        return ConnectionFileSystem(self._client, self.connection_id)
+
+
+# ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 
@@ -1001,15 +1203,16 @@ def as_refs(bindings: Dict[str, Any]) -> Dict[str, Any]:
 
 def _split_bindings(
     bindings: Dict[str, Any],
-) -> Tuple[Dict[str, Input], Dict[str, Output], Dict[str, Model]]:
+) -> Tuple[Dict[str, Input], Dict[str, Output], Dict[str, Model], Dict[str, Connection]]:
     bindings = as_refs(bindings)
     inputs = {k: v for k, v in bindings.items() if isinstance(v, Input)}
     outputs = {k: v for k, v in bindings.items() if isinstance(v, Output)}
     models = {k: v for k, v in bindings.items() if isinstance(v, Model)}
+    connections = {k: v for k, v in bindings.items() if isinstance(v, Connection)}
     unknown = {k: v for k, v in bindings.items() if not isinstance(v, _DatasetRef)}
     if unknown:
-        raise TypeError(f"transform bindings must be Input/Model/Output, got: {list(unknown)}")
-    return inputs, outputs, models
+        raise TypeError(f"transform bindings must be Input/Model/Connection/Output, got: {list(unknown)}")
+    return inputs, outputs, models, connections
 
 
 def transform_df(**bindings: Any) -> Callable:
@@ -1019,7 +1222,7 @@ def transform_df(**bindings: Any) -> Callable:
     The decorated function is called as ``fn(client)`` and runs eagerly: it
     reads every input, calls the body, and writes the returned DataFrame.
     """
-    inputs, outputs, models = _split_bindings(bindings)
+    inputs, outputs, models, connections = _split_bindings(bindings)
     if len(outputs) != 1:
         raise TypeError(f"transform_df expects exactly one Output, got {len(outputs)}")
 
@@ -1037,6 +1240,8 @@ def transform_df(**bindings: Any) -> Callable:
                     ).dataframe()
                 elif name in models:
                     call_kwargs[name] = TransformModel(client, models[name].ref)
+                elif name in connections:
+                    call_kwargs[name] = TransformConnection(client, connections[name].ref)
                 elif name in outputs:
                     # Tolerated for parity with the user's snippet; the return
                     # value is what actually gets written.
@@ -1050,6 +1255,7 @@ def transform_df(**bindings: Any) -> Callable:
         wrapper.inputs = inputs
         wrapper.outputs = outputs
         wrapper.models = models
+        wrapper.connections = connections
         return wrapper
 
     return decorator
@@ -1063,7 +1269,7 @@ def transform(**bindings: Any) -> Callable:
 
     The decorated function is called as ``fn(client)`` and runs eagerly.
     """
-    inputs, outputs, models = _split_bindings(bindings)
+    inputs, outputs, models, connections = _split_bindings(bindings)
 
     def decorator(fn: Callable) -> Callable:
         params = inspect.signature(fn).parameters
@@ -1077,6 +1283,8 @@ def transform(**bindings: Any) -> Callable:
                     call_kwargs[name] = TransformInput(client, spec.ref, **spec.read_options())
                 elif name in models:
                     call_kwargs[name] = TransformModel(client, models[name].ref)
+                elif name in connections:
+                    call_kwargs[name] = TransformConnection(client, connections[name].ref)
                 elif name in outputs:
                     call_kwargs[name] = TransformOutput(client, outputs[name].ref)
             return fn(**call_kwargs)
@@ -1084,6 +1292,7 @@ def transform(**bindings: Any) -> Callable:
         wrapper.inputs = inputs
         wrapper.outputs = outputs
         wrapper.models = models
+        wrapper.connections = connections
         return wrapper
 
     return decorator
@@ -1111,7 +1320,7 @@ def train(**bindings: _DatasetRef) -> Callable:
     A ``Model`` binding alongside the ``Output`` expresses fine-tuning: the
     lineage then reads model -> train -> model.
     """
-    inputs, outputs, models = _split_bindings(bindings)
+    inputs, outputs, models, connections = _split_bindings(bindings)
     if len(outputs) != 1:
         raise TypeError(f"train expects exactly one Output (the model), got {len(outputs)}")
 
@@ -1126,6 +1335,8 @@ def train(**bindings: _DatasetRef) -> Callable:
                     call_kwargs[name] = TransformInput(client, inputs[name].ref).dataframe()
                 elif name in models:
                     call_kwargs[name] = TransformModel(client, models[name].ref)
+                elif name in connections:
+                    call_kwargs[name] = TransformConnection(client, connections[name].ref)
                 elif name in outputs:
                     call_kwargs[name] = TransformModel(client, outputs[name].ref)
             result = fn(**call_kwargs)
@@ -1136,6 +1347,7 @@ def train(**bindings: _DatasetRef) -> Callable:
         wrapper.inputs = inputs
         wrapper.outputs = outputs
         wrapper.models = models
+        wrapper.connections = connections
         return wrapper
 
     return decorator
