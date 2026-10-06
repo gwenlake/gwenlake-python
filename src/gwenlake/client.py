@@ -233,6 +233,7 @@ from gwenlake.datasets import Datasets, AsyncDatasets
 from gwenlake.files import Files, AsyncFiles
 from gwenlake.projects import Projects, AsyncProjects
 from gwenlake.statements import Statements, AsyncStatements
+from gwenlake.connections import Connections, AsyncConnections
 
 
 # Single gateway: every resource (inference + catalog) is served under /v1, so
@@ -301,6 +302,7 @@ class Gwenlake:
     files: Files
     projects: Projects
     statements: Statements
+    connections: Connections
 
     def __init__(
         self,
@@ -335,6 +337,7 @@ class Gwenlake:
         self.files = Files(self._client)
         self.projects = Projects(self._client)
         self.statements = Statements(self._client)
+        self.connections = Connections(self._client)
 
 
 class AsyncGwenlake:
@@ -347,6 +350,7 @@ class AsyncGwenlake:
     files: AsyncFiles
     projects: AsyncProjects
     statements: AsyncStatements
+    connections: AsyncConnections
 
     def __init__(
         self,
@@ -381,3 +385,4 @@ class AsyncGwenlake:
         self.files = AsyncFiles(self._client)
         self.projects = AsyncProjects(self._client)
         self.statements = AsyncStatements(self._client)
+        self.connections = AsyncConnections(self._client)
