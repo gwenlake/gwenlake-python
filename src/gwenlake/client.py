@@ -149,6 +149,21 @@ class ApiClient(BaseApiClient):
                 if attempt == attempts - 1:
                     raise
 
+    def send_stream(self, request_info: RequestOptions) -> httpx.Response:
+        """`send`, with the body left on the wire: the response is returned as
+        soon as its headers are in, the caller reads it (`iter_bytes`, …) and
+        must `close()` it. Transport errors are retried as `send` retries them,
+        and only until the response arrives: a body that breaks off part-way is
+        the caller's to resume, since only it knows how much it already has."""
+        request = self._build_request(request_info)
+        attempts = self._max_retries + 1 if request.method in _IDEMPOTENT_METHODS else 1
+        for attempt in range(attempts):
+            try:
+                return self._client.send(request=request, stream=True)
+            except _RETRYABLE_TRANSPORT_ERRORS:
+                if attempt == attempts - 1:
+                    raise
+
     def stream(self, request_info: RequestOptions) -> Iterator[str]:
         request = self._build_request(request_info)
         attempts = self._max_retries + 1 if request.method in _IDEMPOTENT_METHODS else 1
@@ -199,6 +214,18 @@ class AsyncApiClient(BaseApiClient):
         for attempt in range(attempts):
             try:
                 return await self._client.send(request=request, stream=False)
+            except _RETRYABLE_TRANSPORT_ERRORS:
+                if attempt == attempts - 1:
+                    raise
+
+    async def send_stream(self, request_info: RequestOptions) -> httpx.Response:
+        """`send`, with the body left on the wire — see `ApiClient.send_stream`.
+        The caller must `aclose()` the response."""
+        request = self._build_request(request_info)
+        attempts = self._max_retries + 1 if request.method in _IDEMPOTENT_METHODS else 1
+        for attempt in range(attempts):
+            try:
+                return await self._client.send(request=request, stream=True)
             except _RETRYABLE_TRANSPORT_ERRORS:
                 if attempt == attempts - 1:
                     raise

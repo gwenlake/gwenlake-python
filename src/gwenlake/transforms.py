@@ -883,6 +883,9 @@ class TransformOutput:
 # Connections (sources a transform walks itself)
 # ---------------------------------------------------------------------------
 
+OPEN_BUFFER_SIZE = 1024 * 1024
+
+
 class ConnectionFileSystem:
     """Read-only file access to what a connection holds, through the catalog.
 
@@ -897,6 +900,10 @@ class ConnectionFileSystem:
     Listings are recursive (every file source lists that way) and paged by the
     catalog; ``ls`` follows the pages to the end. Paths are relative to the
     connection's root. There is no ``write``: a connection is a source.
+
+    Neither ``read`` nor ``open`` has to move a whole file: ``read`` takes a
+    byte range and ``open`` reads lazily, so a large file costs what is read
+    of it — the head and the index of a video of several GB, not the video.
     """
 
     def __init__(self, client: Any, connection_id: str):
@@ -912,18 +919,38 @@ class ConnectionFileSystem:
 
     files = ls
 
-    def read(self, filepath: str) -> bytes:
-        return self._client.connections.download(self._connection_id, filepath)
+    def read(self, filepath: str, offset: int = 0, length: Optional[int] = None) -> bytes:
+        """The file's bytes — or ``length`` of them from ``offset`` (the rest of
+        the file without ``length``): fewer near the end, ``b""`` at or past
+        it. Where the connection's type can seek, only the range moves."""
+        return self._client.connections.download(
+            self._connection_id, filepath, offset=offset, length=length,
+        )
 
-    def open(self, filepath: str, mode: str = "rb"):
-        """A ``BytesIO`` of the file. Write modes are refused: a connection is
-        read-only from a transform — write into the output's filesystem."""
-        if "w" in mode or "a" in mode or "+" in mode:
+    def open(
+        self, filepath: str, mode: str = "rb", *, buffer_size: int = OPEN_BUFFER_SIZE,
+    ) -> io.BufferedReader:
+        """The file as a seekable binary file that reads it lazily: nothing is
+        fetched before the first read, reads that follow one another share one
+        response, and ``seek`` moves where the next one starts — so a library
+        that wants a file (``zipfile``, ``pyarrow.parquet``, a video demuxer)
+        fetches the parts it needs, not the whole file. Close it, or use
+        ``with``. Where the connection's type cannot serve a range, the file is
+        copied once, whole, to a temporary spool (in memory up to 64 MiB, then
+        on disk) and read from there.
+
+        Write modes are refused: a connection is read-only from a transform —
+        write into the output's filesystem."""
+        if any(c in mode for c in "wax+"):
             raise GwenlakeException(
                 f"a connection is read-only: cannot open {filepath!r} for writing — "
                 "write into the transform's Output instead"
             )
-        return io.BytesIO(self.read(filepath))
+        from gwenlake.connections import _RelayFile
+
+        return io.BufferedReader(
+            _RelayFile(self._client.connections, self._connection_id, filepath), buffer_size,
+        )
 
     def write(self, *args: Any, **kwargs: Any) -> None:
         raise GwenlakeException("a connection is read-only: write into the transform's Output instead")
