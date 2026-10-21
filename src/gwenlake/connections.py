@@ -50,10 +50,11 @@ def _list_params(
 
 def _files_params(
     path: Optional[str], glob: Optional[str], start_after: Optional[str], limit: Optional[int],
+    max_depth: Optional[int] = None,
 ) -> Dict[str, Any]:
     return {
         k: v for k, v in
-        {"path": path, "glob": glob, "start_after": start_after, "limit": limit}.items()
+        {"path": path, "glob": glob, "start_after": start_after, "limit": limit, "max_depth": max_depth}.items()
         if v
     }
 
@@ -148,15 +149,18 @@ class Connections:
 
     def list_files(
         self, connection_id: str, *, path: Optional[str] = None, glob: Optional[str] = None,
-        start_after: Optional[str] = None, limit: Optional[int] = None,
+        start_after: Optional[str] = None, limit: Optional[int] = None, max_depth: Optional[int] = None,
     ) -> Dict[str, Any]:
         """One page of the connection's files: ``{"data": [...], "next_start_after": ...}``.
         Each entry carries ``path`` (relative to the connection's root),
-        ``filename``, ``size`` and ``last_modified``. ``glob`` keeps only the
-        matching paths (``*`` within a directory, ``**`` across)."""
+        ``filename``, ``size``, ``last_modified`` and ``is_dir``. ``glob`` keeps
+        only the matching paths (``*`` within a directory, ``**`` across).
+        ``max_depth`` bounds the descent: ``1`` is the directory's own entries,
+        its subdirectories among them as ``is_dir`` entries whose ``path`` ends
+        in ``/``."""
         response = self._client.send(RequestOptions(
             method="GET", url=f"/connections/{connection_id}/files",
-            params=_files_params(path, glob, start_after, limit),
+            params=_files_params(path, glob, start_after, limit, max_depth),
             headers={"Accept": "application/json"},
         ))
         response.raise_for_status()
@@ -164,13 +168,14 @@ class Connections:
 
     def iter_files(
         self, connection_id: str, *, path: Optional[str] = None, glob: Optional[str] = None,
-        page_size: Optional[int] = None,
+        page_size: Optional[int] = None, max_depth: Optional[int] = None,
     ) -> Iterator[Dict[str, Any]]:
         """Every file, following the pages to the end."""
         start_after: Optional[str] = None
         while True:
             page = self.list_files(
                 connection_id, path=path, glob=glob, start_after=start_after, limit=page_size,
+                max_depth=max_depth,
             )
             entries = page.get("data") or []
             yield from entries
@@ -259,11 +264,11 @@ class AsyncConnections:
 
     async def list_files(
         self, connection_id: str, *, path: Optional[str] = None, glob: Optional[str] = None,
-        start_after: Optional[str] = None, limit: Optional[int] = None,
+        start_after: Optional[str] = None, limit: Optional[int] = None, max_depth: Optional[int] = None,
     ) -> Dict[str, Any]:
         response = await self._client.send(RequestOptions(
             method="GET", url=f"/connections/{connection_id}/files",
-            params=_files_params(path, glob, start_after, limit),
+            params=_files_params(path, glob, start_after, limit, max_depth),
             headers={"Accept": "application/json"},
         ))
         response.raise_for_status()
@@ -271,12 +276,13 @@ class AsyncConnections:
 
     async def iter_files(
         self, connection_id: str, *, path: Optional[str] = None, glob: Optional[str] = None,
-        page_size: Optional[int] = None,
+        page_size: Optional[int] = None, max_depth: Optional[int] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         start_after: Optional[str] = None
         while True:
             page = await self.list_files(
                 connection_id, path=path, glob=glob, start_after=start_after, limit=page_size,
+                max_depth=max_depth,
             )
             entries = page.get("data") or []
             for entry in entries:
