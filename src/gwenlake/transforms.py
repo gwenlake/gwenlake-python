@@ -897,9 +897,10 @@ class ConnectionFileSystem:
             with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
                 shutil.copyfileobj(src, dst)
 
-    Listings are recursive (every file source lists that way) and paged by the
-    catalog; ``ls`` follows the pages to the end. Paths are relative to the
-    connection's root. There is no ``write``: a connection is a source.
+    Listings are recursive (every file source lists that way) unless ``depth``
+    says how far, and paged by the catalog; ``ls`` follows the pages to the end.
+    Paths are relative to the connection's root. There is no ``write``: a
+    connection is a source.
 
     Neither ``read`` nor ``open`` has to move a whole file: ``read`` takes a
     byte range and ``open`` reads lazily, so a large file costs what is read
@@ -910,12 +911,23 @@ class ConnectionFileSystem:
         self._client = client
         self._connection_id = connection_id
 
-    def ls(self, path: Optional[str] = None, *, glob: Optional[str] = None) -> List[Dict[str, Any]]:
+    def ls(
+        self, path: Optional[str] = None, *, glob: Optional[str] = None, depth: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         """Every file under ``path`` (the whole connection when omitted),
         optionally only those matching ``glob`` (``*`` within a directory,
-        ``**`` across). Each entry has ``path``, ``filename``, ``size`` and
-        ``last_modified``."""
-        return list(self._client.connections.iter_files(self._connection_id, path=path, glob=glob))
+        ``**`` across). Each entry has ``path``, ``filename``, ``size``,
+        ``last_modified`` and ``is_dir``.
+
+        ``depth`` bounds the descent — ``ls`` where the default is ``find``:
+        ``depth=1`` is the directory's own entries, its subdirectories among
+        them as ``is_dir`` entries whose ``path`` ends in ``/``, to list in turn
+        with ``ls(entry["path"], depth=1)``. A source that cannot stop short
+        (every one but smb, for now) still answers every file below.
+        """
+        return list(
+            self._client.connections.iter_files(self._connection_id, path=path, glob=glob, max_depth=depth)
+        )
 
     files = ls
 
