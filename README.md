@@ -132,6 +132,20 @@ def process(raw_data):
 process(client)   # reads, computes, writes
 ```
 
+With several `Output`s, return a dict keyed by their keyword names; each
+DataFrame is written to the matching dataset:
+
+```python
+@transform_df(
+    raw=Input("Project_A.contacts"),
+    valid=Output("Project_A.contacts_valid"),
+    rejected=Output("Project_A.contacts_rejected"),
+)
+def split(raw):
+    ok = raw["email"].str.contains("@")
+    return {"valid": raw[ok], "rejected": raw[~ok]}
+```
+
 `transform` — the lower-level form: the function receives `TransformInput` /
 `TransformOutput` objects and reads/writes explicitly. Use it for non-tabular
 data (images, PDFs, …) via `.filesystem()`:

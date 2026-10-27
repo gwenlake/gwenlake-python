@@ -19,8 +19,9 @@ Gwenlake client:
 Three decorators are provided:
 
 * ``transform_df`` — the decorated function receives each ``Input`` as a
-  ``pandas.DataFrame`` (matched by keyword name) and **returns** a single
-  DataFrame which is written to the (single) ``Output``.
+  ``pandas.DataFrame`` (matched by keyword name) and **returns** the DataFrame
+  written to its ``Output`` — or, with several ``Output``s, a dict keyed by
+  their keyword names.
 * ``transform`` — the lower-level form: the function receives ``TransformInput``
   and ``TransformOutput`` objects (matched by keyword name). Call
   ``.dataframe()`` to read, ``.write_dataframe(df)`` to write, and
@@ -1256,14 +1257,29 @@ def _split_bindings(
 
 def transform_df(**bindings: Any) -> Callable:
     """Decorate a function that takes ``Input`` DataFrames (by keyword name) and
-    returns a single DataFrame, written to the (single) ``Output``.
+    returns what gets written to its ``Output``(s).
+
+    With a single ``Output`` the body returns one DataFrame. With several, it
+    returns a ``dict`` keyed by the Output keyword names::
+
+        @transform_df(
+            raw=Input("crm.contacts"),
+            valid=Output("crm.contacts_valid"),
+            rejected=Output("crm.contacts_rejected"),
+        )
+        def split(raw):
+            ok = raw.email.str.contains("@")
+            return {"valid": raw[ok], "rejected": raw[~ok]}
+
+    Every declared Output must be present in the dict; a key naming no Output
+    is an error. Returning ``None`` writes nothing.
 
     The decorated function is called as ``fn(client)`` and runs eagerly: it
-    reads every input, calls the body, and writes the returned DataFrame.
+    reads every input, calls the body, and writes the returned DataFrame(s).
     """
     inputs, outputs, models, connections = _split_bindings(bindings)
-    if len(outputs) != 1:
-        raise TypeError(f"transform_df expects exactly one Output, got {len(outputs)}")
+    if not outputs:
+        raise TypeError("transform_df expects at least one Output, got none")
 
     def decorator(fn: Callable) -> Callable:
         params = inspect.signature(fn).parameters
@@ -1286,9 +1302,30 @@ def transform_df(**bindings: Any) -> Callable:
                     # value is what actually gets written.
                     call_kwargs[name] = TransformOutput(client, outputs[name].ref)
             result = fn(**call_kwargs)
-            if result is not None:
+            if result is None:
+                return result
+            if len(outputs) == 1:
                 out = next(iter(outputs.values()))
                 TransformOutput(client, out.ref).write_dataframe(result)
+                return result
+            if not isinstance(result, dict):
+                raise TypeError(
+                    f"{fn.__name__} declares {len(outputs)} Outputs, so it must return a dict "
+                    f"keyed by their names ({', '.join(outputs)}), got {type(result).__name__}"
+                )
+            unknown = set(result) - set(outputs)
+            if unknown:
+                raise TypeError(
+                    f"{fn.__name__} returned keys matching no Output: {sorted(unknown)} "
+                    f"(declared: {', '.join(outputs)})"
+                )
+            missing = set(outputs) - set(result)
+            if missing:
+                raise TypeError(
+                    f"{fn.__name__} returned no DataFrame for Output(s): {sorted(missing)}"
+                )
+            for name, spec in outputs.items():
+                TransformOutput(client, spec.ref).write_dataframe(result[name])
             return result
 
         wrapper.inputs = inputs
