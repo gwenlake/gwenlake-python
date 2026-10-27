@@ -240,9 +240,15 @@ it (read it **before** the run's first write; an empty frame of `schema` while
 there is none), `dataframe("current")` re-reads it, `filesystem("previous")`
 is the same for files. Writes default to `modify` (`set_mode("replace")` or
 `mode="replace"` snapshots instead). Bump `semantic_version` to start over on
-the next build. Inputs are always read whole: the catalog keeps no
-transaction log, so there is no `"added"` mode (it is refused rather than
-quietly answered with everything) — the log is what remembers.
+the next build. An **Iceberg** input also answers `dataframe("added")` inside a build — the
+rows appended since the last successful run, read from the table's own
+snapshot history up to the point pinned before the run — and
+`dataframe("previous")`, the table as the last run saw it. A files dataset or
+a connection keeps no history: those are always read whole, and `"added"` is
+refused rather than quietly answered with everything — the log Output is what
+remembers. A table rewritten in between (snapshot, delete, upsert) has no
+delta either; the catalog says so, and the run reads it whole or bumps
+`semantic_version`.
 
 ### Models
 

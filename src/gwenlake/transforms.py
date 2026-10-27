@@ -314,6 +314,10 @@ def _sql_table(client: Any, ref: str) -> str:
     the read resolves that Iceberg branch — the same `project.dataset:branch`
     syntax `/sql` understands. Non-Iceberg inputs ignore it server-side."""
     handle = ref if "." in ref else _ref_to_sql_table(client, ref)
+    if "@" in handle:
+        # Already a snapshot handle (`project.dataset[:branch]@…`), built by
+        # `IncrementalTransformInput` on top of this function: as-is.
+        return handle
     branch = _catalog_branch()
     return f"{handle}:{branch}" if branch else handle
 
@@ -974,40 +978,141 @@ def _empty_dataframe(schema: Any):
     return pd.DataFrame(columns=list(schema))
 
 
-def _check_input_mode(mode: str) -> None:
-    if mode == "current":
-        return
-    if mode in _INPUT_MODES_REFUSED:
-        raise GwenlakeException(
-            f"input mode {mode!r} is not available: the catalog keeps no transaction log of a "
-            "dataset, so an input is always read whole (Foundry's snapshot input). Keep the "
-            "keys you have processed in an Output and read them back with "
-            "output.dataframe('previous')."
-        )
-    raise GwenlakeException(f"unknown input mode {mode!r} (use 'current')")
+def _catalog_input_snapshots() -> Dict[str, Dict[str, Any]]:
+    """``CATALOG_INPUT_SNAPSHOTS`` as the build engine exports it for an
+    incremental run: per input slug, ``{id, from, to}`` — the Iceberg snapshot
+    the last successful build read up to (``from``, null on a first run or
+    when the run starts over) and the head pinned before this run (``to``).
+    Only Iceberg inputs holding a table appear. Empty outside a build."""
+    import json
+
+    raw = os.environ.get("CATALOG_INPUT_SNAPSHOTS", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except ValueError:
+        return {}
+
+
+_INPUT_MODES = ("current", "added", "previous")
 
 
 class IncrementalTransformInput(TransformInput):
     """An input under ``@incremental``: :class:`TransformInput` plus Foundry's
-    ``mode`` argument, for the one mode Atlas can answer — ``"current"``, the
-    whole dataset.
+    ``mode`` argument.
 
-    ``"added"`` (Foundry's default under ``@incremental``) and ``"previous"``
-    are refused rather than quietly answered with everything: a body believing
-    it sees only the new rows would process the whole dataset again on every
-    run. The memory belongs in an Output, read back as ``"previous"``.
+    ``"current"`` is the whole dataset. ``"added"`` (Foundry's default under
+    ``@incremental``) and ``"previous"`` exist for an **Iceberg** input inside
+    a build: the table's snapshots are its transaction log, the engine pins
+    where it stood before the run (``CATALOG_INPUT_SNAPSHOTS``), and the read
+    is ``project.dataset@from..to`` — the rows appended since the last
+    successful run, up to that pinned head, never "now" — or ``@from``, the
+    table as the last run saw it. On a first run, or when the run starts
+    over, ``added`` is everything and ``previous`` is empty.
+
+    Anything else — a files dataset, a mediaset, a run outside a build — is
+    refused for those two modes rather than quietly answered with everything:
+    a body believing it sees only the new rows would process the whole
+    dataset again on every run. For those the memory belongs in an Output,
+    read back as ``output.dataframe("previous")``. The catalog also refuses
+    ``added`` when the table was rewritten in between (an overwrite, a delete,
+    an upsert): there is no delta then, and the error says to read the table
+    whole or bump ``semantic_version``.
     """
 
-    def dataframe(self, mode: str = "current", schema: Any = None, **options: Any):
-        _check_input_mode(mode)
-        return super().dataframe(**options)
+    def _snapshots(self) -> Optional[Dict[str, Any]]:
+        exported = _catalog_input_snapshots()
+        slug = self.ref.split(".", 1)[-1]
+        if slug in exported:
+            return exported[slug]
+        return next((v for v in exported.values() if v.get("id") == self.ref), None)
 
-    def iter_dataframes(self, mode: str = "current", **options: Any) -> Iterator[Any]:
-        _check_input_mode(mode)
-        return super().iter_dataframes(**options)
+    def _table(self, mode: str) -> str:
+        """The table handle for ``mode``: the plain one for ``current``, the
+        ``@`` form for ``added`` / ``previous``."""
+        if mode == "current":
+            return _sql_table(self._client, self.ref)
+        if mode not in _INPUT_MODES:
+            raise GwenlakeException(f"unknown input mode {mode!r} (use 'current', 'added' or 'previous')")
+        span = self._snapshots()
+        if span is None:
+            raise GwenlakeException(
+                f"{self.ref}: input mode {mode!r} needs an Iceberg input inside a build — the "
+                "catalog keeps no transaction log of a files dataset or a connection, so those "
+                "are always read whole (Foundry's snapshot input). Keep the keys you have "
+                "processed in an Output and read them back with output.dataframe('previous')."
+            )
+        handle = _sql_table(self._client, self.ref)
+        since, until = span.get("from"), span.get("to")
+        if mode == "added":
+            return f"{handle}@{since}..{until}" if since is not None else f"{handle}@{until}"
+        # previous: the table as the last run saw it — nothing, before any run.
+        return f"{handle}@{since}" if since is not None else None
+
+    def _read(self, mode: str, *, columns, chunk_size, order_by, iterate: bool):
+        table = self._table(mode)
+        if table is None:
+            # No previous run: an empty frame, shaped by the table itself.
+            pd = _require_pandas()
+            empty = _run_arrow(
+                self._client,
+                f"SELECT {_select_clause(columns)} FROM '{self._table('current')}' LIMIT 0",
+            ).to_pandas()
+            return iter([empty]) if iterate else empty
+        ref = self.ref
+        if mode != "current":
+            # `_read_dataframe` builds the handle from the ref; hand it the
+            # `@` form directly (a ref holding a dot is used as-is).
+            ref = table
+        if iterate:
+            return _iter_dataframes(self._client, ref, chunk_size or DEFAULT_CHUNK_SIZE, columns, order_by)
+        return _read_dataframe(self._client, ref, columns=columns, chunk_size=chunk_size, order_by=order_by)
+
+    def dataframe(
+        self,
+        mode: str = "current",
+        schema: Any = None,
+        *,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = None,
+        order_by: Optional[str] = None,
+    ):
+        """The input as a ``pandas.DataFrame`` — ``"current"`` (whole),
+        ``"added"`` (appended since the last successful run) or
+        ``"previous"`` (as the last run saw it). ``schema`` is accepted for
+        Foundry parity; the frame always takes the table's own columns."""
+        return self._read(
+            mode,
+            columns=self.columns if columns is None else columns,
+            chunk_size=self.chunk_size if chunk_size is None else chunk_size,
+            order_by=self.order_by if order_by is None else order_by,
+            iterate=False,
+        )
+
+    def iter_dataframes(
+        self,
+        mode: str = "current",
+        *,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = None,
+        order_by: Optional[str] = None,
+    ) -> Iterator[Any]:
+        return self._read(
+            mode,
+            columns=self.columns if columns is None else columns,
+            chunk_size=chunk_size or self.chunk_size or DEFAULT_CHUNK_SIZE,
+            order_by=self.order_by if order_by is None else order_by,
+            iterate=True,
+        )
 
     def filesystem(self, mode: str = "current") -> FileSystem:
-        _check_input_mode(mode)
+        if mode != "current":
+            raise GwenlakeException(
+                f"{self.ref}: filesystem({mode!r}) is not available — an Iceberg table's history "
+                "is read as rows (dataframe('added')), a files dataset keeps none"
+            )
         return super().filesystem()
 
 

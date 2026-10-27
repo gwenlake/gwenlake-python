@@ -91,13 +91,15 @@ class FakeClient:
         class Statements:
             def create(self_, statement, format="pyarrow", timeout=None):
                 client.calls.append(("select", statement))
-                m = re.search(r"FROM 'p\.([^':]+)", statement)
+                m = re.search(r"FROM 'p\.([^':@]+)", statement)
                 ds = next(d for d in client._datasets.values() if d.alias == m.group(1))
                 rows = ds.rows
                 cols = re.match(r"SELECT (.+) FROM", statement).group(1)
                 if cols != "*":
                     rows = rows[[c.strip('"') for c in cols.split(", ")]]
-                if "OFFSET" in statement:
+                if statement.rstrip().endswith("LIMIT 0"):
+                    rows = rows.iloc[0:0]
+                elif "OFFSET" in statement:
                     offset = int(re.search(r"OFFSET (\d+)", statement).group(1))
                     limit = int(re.search(r"LIMIT (\d+)", statement).group(1))
                     rows = rows.iloc[offset:offset + limit]
@@ -126,7 +128,7 @@ def client(log_rows):
 
 @pytest.fixture(autouse=True)
 def _outside_a_build(monkeypatch):
-    for var in ("CATALOG_INCREMENTAL", "CATALOG_BUILD_ID", "CATALOG_BRANCH"):
+    for var in ("CATALOG_INCREMENTAL", "CATALOG_BUILD_ID", "CATALOG_BRANCH", "CATALOG_INPUT_SNAPSHOTS"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -478,7 +480,8 @@ def test_transform_df_several_outputs(client, log_rows):
     ]
 
 
-def test_input_modes_added_and_previous_are_refused(client):
+def test_input_modes_added_and_previous_are_refused_without_a_log(client):
+    """Outside a build, or on a files dataset, nothing pins a snapshot."""
     @incremental()
     @transform(src=Input("p.log"), log=Output("p.fresh"))
     def fn(src, log):
@@ -487,12 +490,69 @@ def test_input_modes_added_and_previous_are_refused(client):
         for mode in ("added", "previous"):
             with pytest.raises(GwenlakeException, match="snapshot input"):
                 src.dataframe(mode)
-        with pytest.raises(GwenlakeException, match="snapshot input"):
+        with pytest.raises(GwenlakeException, match="not available"):
             src.filesystem("added")
         with pytest.raises(GwenlakeException, match="unknown input mode"):
             src.dataframe("latest")
 
     fn(client)
+
+
+def test_added_reads_the_rows_appended_since_the_last_run(client, monkeypatch):
+    monkeypatch.setenv(
+        "CATALOG_INPUT_SNAPSHOTS",
+        '{"log": {"id": "res.dataset.log", "from": 11, "to": 42}}',
+    )
+
+    @incremental()
+    @transform(src=Input("p.log"), out=Output("p.fresh"))
+    def fn(src, out):
+        src.dataframe("added")
+        src.dataframe("previous", columns=["path"])
+        list(src.iter_dataframes("added", chunk_size=10))
+        src.dataframe("current")
+
+    fn(client)
+    statements = [c[1] for c in client.of("select")]
+    assert any("FROM 'p.log@11..42'" in s for s in statements), statements
+    assert any('SELECT "path" FROM \'p.log@11\'' in s for s in statements), statements
+    assert sum("@11..42" in s for s in statements) >= 2             # dataframe + iter
+    assert any("FROM 'p.log'" in s and "@" not in s for s in statements), statements
+
+
+def test_added_on_a_first_run_is_everything_and_previous_is_empty(client, monkeypatch):
+    monkeypatch.setenv(
+        "CATALOG_INPUT_SNAPSHOTS",
+        '{"log": {"id": "res.dataset.log", "from": null, "to": 42}}',
+    )
+
+    @incremental()
+    @transform(src=Input("p.log"), out=Output("p.fresh"))
+    def fn(src, out):
+        assert len(src.dataframe("added")) == 2
+        prev = src.dataframe("previous")
+        assert prev.empty and list(prev.columns) == ["path", "size"]
+
+    fn(client)
+    statements = [c[1] for c in client.of("select")]
+    assert any("FROM 'p.log@42'" in s for s in statements), statements
+    assert any("LIMIT 0" in s for s in statements), statements
+
+
+def test_added_carries_the_build_branch_before_the_snapshot(client, monkeypatch):
+    monkeypatch.setenv("CATALOG_BRANCH", "exp")
+    monkeypatch.setenv(
+        "CATALOG_INPUT_SNAPSHOTS",
+        '{"log": {"id": "res.dataset.log", "from": 1, "to": 2}}',
+    )
+
+    @incremental()
+    @transform(src=Input("p.log"), out=Output("p.fresh"))
+    def fn(src, out):
+        src.dataframe("added")
+
+    fn(client)
+    assert any("FROM 'p.log:exp@1..2'" in c[1] for c in client.of("select"))
 
 
 # ---------------------------------------------------------------------------
