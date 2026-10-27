@@ -20,28 +20,39 @@ def _upload_url(dataset_id: str, path: Optional[str]) -> str:
     return f"{base}/{path}" if path else base
 
 
+def _branch_params(**values: Optional[str]) -> Dict[str, str]:
+    """Query parameters from the optional ones a file call takes (`path`,
+    `branch`): only those set, so trunk requests stay exactly what they were."""
+    return {k: v for k, v in values.items() if v}
+
+
 class Files:
 
     def __init__(self, client: ApiClient):
         self._client = client
 
-    def list(self, dataset_id: str, path: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list(
+        self, dataset_id: str, path: Optional[str] = None, *, branch: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        # `branch` reads a data branch's view (files datasets: the overlay
+        # resolved over trunk; Iceberg: ignored, the table's files are listed).
         response = self._client.send(
             RequestOptions(
                 method="GET",
                 url=f"/datasets/{dataset_id}/files",
-                params={"path": path} if path else {},
+                params=_branch_params(path=path, branch=branch),
                 headers={"Accept": "application/json"},
             ),
         )
         response.raise_for_status()
         return response.json().get("data")
 
-    def download(self, dataset_id: str, filepath: str) -> bytes:
+    def download(self, dataset_id: str, filepath: str, *, branch: Optional[str] = None) -> bytes:
         response = self._client.send(
             RequestOptions(
                 method="GET",
                 url=f"/datasets/{dataset_id}/files/{filepath}",
+                params=_branch_params(branch=branch),
             ),
         )
         response.raise_for_status()
@@ -59,11 +70,14 @@ class Files:
         response.raise_for_status()
         return response.json()
 
-    def delete(self, dataset_id: str, filepath: str) -> bool:
+    def delete(self, dataset_id: str, filepath: str, *, branch: Optional[str] = None) -> bool:
+        # On a files dataset's branch the path is tombstoned there; trunk is
+        # never touched by a branch delete.
         response = self._client.send(
             RequestOptions(
                 method="DELETE",
                 url=f"/datasets/{dataset_id}/files/{filepath}",
+                params=_branch_params(branch=branch),
                 headers={"Accept": "application/json"},
             ),
         )
@@ -101,23 +115,26 @@ class AsyncFiles:
     def __init__(self, client: AsyncApiClient):
         self._client = client
 
-    async def list(self, dataset_id: str, path: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def list(
+        self, dataset_id: str, path: Optional[str] = None, *, branch: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         response = await self._client.send(
             RequestOptions(
                 method="GET",
                 url=f"/datasets/{dataset_id}/files",
-                params={"path": path} if path else {},
+                params=_branch_params(path=path, branch=branch),
                 headers={"Accept": "application/json"},
             ),
         )
         response.raise_for_status()
         return response.json().get("data")
 
-    async def download(self, dataset_id: str, filepath: str) -> bytes:
+    async def download(self, dataset_id: str, filepath: str, *, branch: Optional[str] = None) -> bytes:
         response = await self._client.send(
             RequestOptions(
                 method="GET",
                 url=f"/datasets/{dataset_id}/files/{filepath}",
+                params=_branch_params(branch=branch),
             ),
         )
         response.raise_for_status()
@@ -135,11 +152,12 @@ class AsyncFiles:
         response.raise_for_status()
         return response.json()
 
-    async def delete(self, dataset_id: str, filepath: str) -> bool:
+    async def delete(self, dataset_id: str, filepath: str, *, branch: Optional[str] = None) -> bool:
         response = await self._client.send(
             RequestOptions(
                 method="DELETE",
                 url=f"/datasets/{dataset_id}/files/{filepath}",
+                params=_branch_params(branch=branch),
                 headers={"Accept": "application/json"},
             ),
         )

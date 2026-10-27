@@ -5,7 +5,7 @@ Uses the default credentials (GWENLAKE_API_KEY env var or the ``default`` profil
 """
 
 import gwenlake
-from gwenlake.transforms import transform_df, transform, train, Input, Model, Output, Connection
+from gwenlake.transforms import transform_df, transform, train, incremental, Input, Model, Output, Connection
 
 client = gwenlake.Gwenlake()  # default credentials
 
@@ -90,6 +90,29 @@ def collect_reports(share, out):
     for f in fs_in.ls(glob="**/*.pdf"):
         with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
             shutil.copyfileobj(src, dst)
+
+
+# 3c) incremental: the transform keeps its own memory in an Output — here the
+#     log of the files it has processed — and reads it back as "previous" on
+#     the next run (an Output can never be an Input of the same transform: that
+#     would be a cycle). Under @incremental writes ADD to the output; bump
+#     semantic_version to start over.
+@incremental(semantic_version=1)
+@transform(
+    share=Connection("Project_A.drop-folder"),
+    pages=Output("Project_A.pages"),
+    log=Output("Project_A.processed"),
+)
+def ingest_new_reports(share, pages, log):
+    import pandas as pd
+
+    done = set(log.dataframe("previous", schema=["path"])["path"])
+    new = [f for f in share.filesystem().ls(glob="**/*.pdf") if f["path"] not in done]
+    if not new:
+        return
+    pages.write_dataframe(pd.DataFrame({"path": [f["path"] for f in new], "text": "..."}))
+    # Write the log last: a failure in between re-processes rather than forgets.
+    log.write_dataframe(pd.DataFrame({"path": [f["path"] for f in new]}))
 
 
 # 4) train: the Output is a MODEL, not a dataset. The body writes the fitted

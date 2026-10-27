@@ -207,6 +207,43 @@ The catalog scanner reads `Connection(...)` like `Input(...)`, so the lineage
 shows the connection feeding the output. `client.connections` exposes the
 same calls directly (`list`, `get`, `list_files`, `iter_files`, `download`).
 
+### Incremental transforms
+
+A transform that must not redo what it has already done keeps its memory in
+one of its **own Outputs** — a log of the files it has processed — and reads
+it back on the next run. An Output can never be an Input of the same
+transform (that is a cycle in the lineage), so `@incremental` — Foundry's
+decorator, in Foundry's place above `@transform` / `@transform_df` — gives
+the Output a `"previous"` reading mode and makes writes **add** to it:
+
+```python
+import pandas as pd
+from gwenlake.transforms import incremental, transform, Connection, Output
+
+@incremental(semantic_version=1)
+@transform(
+    share=Connection("Ops.drop-folder"),
+    pages=Output("Ops.pages"),
+    log=Output("Ops.processed"),
+)
+def ingest(share, pages, log):
+    done = set(log.dataframe("previous", schema=["path"])["path"])   # empty on the first run
+    new = [f for f in share.filesystem().ls(glob="**/*.pdf") if f["path"] not in done]
+    if not new:
+        return
+    pages.write_dataframe(parse(new))                                  # appended
+    log.write_dataframe(pd.DataFrame({"path": [f["path"] for f in new]}))   # last: a failure re-processes, never forgets
+```
+
+`dataframe("previous", schema)` is the output as the last successful run left
+it (read it **before** the run's first write; an empty frame of `schema` while
+there is none), `dataframe("current")` re-reads it, `filesystem("previous")`
+is the same for files. Writes default to `modify` (`set_mode("replace")` or
+`mode="replace"` snapshots instead). Bump `semantic_version` to start over on
+the next build. Inputs are always read whole: the catalog keeps no
+transaction log, so there is no `"added"` mode (it is refused rather than
+quietly answered with everything) — the log is what remembers.
+
 ### Models
 
 A **model** is a catalog resource whose artifacts live in the git repository the

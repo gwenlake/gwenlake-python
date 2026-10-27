@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from gwenlake.client import ApiClient, AsyncApiClient, RequestOptions
 
@@ -55,6 +55,21 @@ class Datasets:
         response.raise_for_status()
         return True
 
+    def empty(self, id: str, *, branch: Optional[str] = None) -> bool:
+        """Remove every row/file of the dataset (`POST /datasets/{id}/empty`),
+        on `branch` when given — the whole-dataset form of a snapshot write
+        that has nothing to write."""
+        response = self._client.send(
+            RequestOptions(
+                method="POST",
+                url=f"/datasets/{id}/empty",
+                params={"branch": branch} if branch else {},
+                headers={"Accept": "application/json"},
+            ),
+        )
+        response.raise_for_status()
+        return True
+
 
 class AsyncDatasets:
 
@@ -102,6 +117,18 @@ class AsyncDatasets:
             RequestOptions(
                 method="DELETE",
                 url=f"/datasets/{id}",
+                headers={"Accept": "application/json"},
+            ),
+        )
+        response.raise_for_status()
+        return True
+
+    async def empty(self, id: str, *, branch: Optional[str] = None) -> bool:
+        response = await self._client.send(
+            RequestOptions(
+                method="POST",
+                url=f"/datasets/{id}/empty",
+                params={"branch": branch} if branch else {},
                 headers={"Accept": "application/json"},
             ),
         )

@@ -52,6 +52,36 @@ the connection's credentials never reach the code::
             with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
                 shutil.copyfileobj(src, dst)
 
+``@incremental`` (Foundry's decorator, in Foundry's place: above ``@transform``
+or ``@transform_df``) is for a transform that keeps its own memory in an
+Output — the log of what it has already processed — and reads it back on the
+next run, instead of starting over::
+
+    @incremental(semantic_version=1)
+    @transform(
+        share=Connection("ops.drop-folder"),
+        out=Output("ops.pages"),
+        log=Output("ops.processed"),
+    )
+    def ingest(share, out, log):
+        done = set(log.dataframe("previous", schema=["path"])["path"])
+        new = [f for f in share.filesystem().ls(glob="**/*.pdf") if f["path"] not in done]
+        if not new:
+            return
+        out.write_dataframe(parse(new))                                  # appended
+        log.write_dataframe(pd.DataFrame({"path": [f["path"] for f in new]}))
+
+Under it an Output answers ``dataframe("previous", schema)`` — its content at
+the end of the last successful run, an empty frame of ``schema`` while there is
+none — and ``dataframe("current")``; and its writes **add** to it
+(``set_mode("modify")``, the default) unless ``set_mode("replace")`` asks for a
+snapshot. Bumping ``semantic_version`` makes the next build start over. An
+Output can never be an Input of the same transform (that is a cycle in the
+lineage); reading it as ``"previous"`` is how it is relied on without one.
+Inputs have no ``"added"`` mode here: the catalog keeps no transaction log, so
+every input is read whole on every run — what Foundry calls a snapshot input —
+and remembering what was done is the Output's job.
+
 Datasets are addressed as ``"<project_alias>.<dataset_alias>"`` — the same
 handle DuckDB uses in ``FROM '<project>.<dataset>'``. A bare string with no dot
 is treated as a dataset alias (searched across datasets) or, failing that, as a
@@ -495,11 +525,21 @@ class _WriteBuffer(io.BytesIO):
 
 
 class FileSystem:
-    """Raw S3-backed file access for a dataset, mirroring Foundry's FileSystem."""
+    """Raw S3-backed file access for a dataset, mirroring Foundry's FileSystem.
+
+    In a branch build (``CATALOG_BRANCH`` set) every call addresses the branch's
+    view: the listing and the reads resolve the overlay over trunk, a delete
+    tombstones the path on the branch, and trunk is never touched — writes
+    already carried the branch, reads and deletes did not, so a ``replace`` on
+    a branch used to clear the trunk's files.
+    """
 
     def __init__(self, client: Any, dataset_id: str):
         self._client = client
         self._dataset_id = dataset_id
+
+    def _list(self, path: Optional[str]) -> List[Dict[str, Any]]:
+        return self._client.files.list(self._dataset_id, path=path, branch=_catalog_branch())
 
     def ls(self, path: Optional[str] = None, *, glob: Optional[str] = None) -> List[Dict[str, Any]]:
         """List files in the dataset (optionally under ``path``).
@@ -510,7 +550,7 @@ class FileSystem:
         dataset — each with a ``path`` relative to the dataset's root, the same
         value :meth:`read`/:meth:`open` take.
         """
-        entries = self._client.files.list(self._dataset_id, path=path)
+        entries = self._list(path)
         if glob is None:
             return entries
         return list(self._walk(path, entries, _glob_regex(glob), recursive="**" in glob))
@@ -523,9 +563,7 @@ class FileSystem:
             if _is_directory(entry):
                 if recursive:
                     sub = filepath.rstrip("/")
-                    yield from self._walk(
-                        sub, self._client.files.list(self._dataset_id, path=sub), selector, recursive=True,
-                    )
+                    yield from self._walk(sub, self._list(sub), selector, recursive=True)
                 continue
             if selector.search(filepath):
                 yield {**entry, "path": filepath, "filename": filepath.rsplit("/", 1)[-1]}
@@ -535,7 +573,7 @@ class FileSystem:
 
     def read(self, filepath: str) -> bytes:
         """Download a file's raw bytes."""
-        return self._client.files.download(self._dataset_id, filepath)
+        return self._client.files.download(self._dataset_id, filepath, branch=_catalog_branch())
 
     def write(
         self,
@@ -555,7 +593,7 @@ class FileSystem:
 
     def delete(self, filepath: str) -> bool:
         """Delete a single file from the dataset."""
-        return self._client.files.delete(self._dataset_id, filepath)
+        return self._client.files.delete(self._dataset_id, filepath, branch=_catalog_branch())
 
     def clear(self, path: Optional[str] = None) -> int:
         """Delete every file in the dataset (recursively, descending into any
@@ -878,6 +916,359 @@ class TransformOutput:
 
     def filesystem(self) -> FileSystem:
         return FileSystem(self._client, self.dataset_id)
+
+
+# ---------------------------------------------------------------------------
+# Incremental transforms (Foundry's ``@incremental``)
+# ---------------------------------------------------------------------------
+
+#: How an incremental Output takes a write: ``modify`` adds to what is there
+#: (the default under ``@incremental``), ``replace`` starts the dataset over.
+INCREMENTAL_WRITE_MODES = ("modify", "replace")
+
+_INPUT_MODES_REFUSED = ("added", "previous")
+
+
+def _run_id() -> str:
+    """What makes this run's part files unique in the output: the catalog's
+    build id when the engine exports one (``CATALOG_BUILD_ID``), a UTC
+    timestamp for a local run. Only filename-safe characters are kept."""
+    build = os.environ.get("CATALOG_BUILD_ID", "").strip()
+    if not build:
+        from datetime import datetime, timezone
+
+        build = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", build)
+
+
+def _catalog_incremental() -> Dict[str, Dict[str, Any]]:
+    """``CATALOG_INCREMENTAL`` as the build engine exports it: per output
+    dataset id, the ``semantic_version`` the last successful incremental build
+    wrote it with. Empty outside a build, and for an output no incremental
+    build has written yet — in both cases nothing starts over."""
+    import json
+
+    raw = os.environ.get("CATALOG_INCREMENTAL", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _empty_dataframe(schema: Any):
+    """An empty ``pandas.DataFrame`` shaped by ``schema``: a list of column
+    names, a ``{name: dtype}`` mapping, a ``pyarrow.Schema``, or a DataFrame
+    whose columns to copy. ``None`` gives a frame with no columns at all."""
+    pd = _require_pandas()
+    if schema is None:
+        return pd.DataFrame()
+    if hasattr(schema, "iloc"):          # a DataFrame
+        return schema.iloc[0:0].copy()
+    if hasattr(schema, "empty_table"):   # a pyarrow.Schema
+        return schema.empty_table().to_pandas()
+    if isinstance(schema, dict):
+        return pd.DataFrame({name: pd.Series(dtype=dtype) for name, dtype in schema.items()})
+    return pd.DataFrame(columns=list(schema))
+
+
+def _check_input_mode(mode: str) -> None:
+    if mode == "current":
+        return
+    if mode in _INPUT_MODES_REFUSED:
+        raise GwenlakeException(
+            f"input mode {mode!r} is not available: the catalog keeps no transaction log of a "
+            "dataset, so an input is always read whole (Foundry's snapshot input). Keep the "
+            "keys you have processed in an Output and read them back with "
+            "output.dataframe('previous')."
+        )
+    raise GwenlakeException(f"unknown input mode {mode!r} (use 'current')")
+
+
+class IncrementalTransformInput(TransformInput):
+    """An input under ``@incremental``: :class:`TransformInput` plus Foundry's
+    ``mode`` argument, for the one mode Atlas can answer — ``"current"``, the
+    whole dataset.
+
+    ``"added"`` (Foundry's default under ``@incremental``) and ``"previous"``
+    are refused rather than quietly answered with everything: a body believing
+    it sees only the new rows would process the whole dataset again on every
+    run. The memory belongs in an Output, read back as ``"previous"``.
+    """
+
+    def dataframe(self, mode: str = "current", schema: Any = None, **options: Any):
+        _check_input_mode(mode)
+        return super().dataframe(**options)
+
+    def iter_dataframes(self, mode: str = "current", **options: Any) -> Iterator[Any]:
+        _check_input_mode(mode)
+        return super().iter_dataframes(**options)
+
+    def filesystem(self, mode: str = "current") -> FileSystem:
+        _check_input_mode(mode)
+        return super().filesystem()
+
+
+class _PreviousFileSystem:
+    """The output's files as they were before this run wrote any — the file
+    side of ``dataframe("previous")``. Read-only, and answering from the
+    listing taken then: ``ls`` gives the **files** under ``path`` (every one,
+    recursively — there are no directory entries), ``read``/``open`` fetch one
+    of them. Writes go through ``output.filesystem()``."""
+
+    def __init__(self, fs: FileSystem, entries: List[Dict[str, Any]]):
+        self._fs = fs
+        self._entries = entries
+        self._paths = {e["path"] for e in entries}
+
+    def ls(self, path: Optional[str] = None, *, glob: Optional[str] = None) -> List[Dict[str, Any]]:
+        prefix = (path or "").strip("/")
+        selector = _glob_regex(glob) if glob else None
+        return [
+            e for e in self._entries
+            if (not prefix or e["path"].startswith(prefix + "/"))
+            and (selector is None or selector.search(e["path"]))
+        ]
+
+    files = ls
+
+    def read(self, filepath: str) -> bytes:
+        if filepath.strip("/") not in self._paths:
+            raise GwenlakeException(f"{filepath!r} was not in the output before this run")
+        return self._fs.read(filepath)
+
+    def open(self, filepath: str, mode: str = "r"):
+        if any(c in mode for c in "wax+"):
+            raise GwenlakeException(
+                "the output's previous files are read-only: write through output.filesystem()"
+            )
+        return io.BytesIO(self.read(filepath))
+
+    def write(self, *args: Any, **kwargs: Any) -> None:
+        raise GwenlakeException("the output's previous files are read-only: write through output.filesystem()")
+
+    delete = clear = write
+
+
+class IncrementalTransformOutput(TransformOutput):
+    """An output under ``@incremental``: :class:`TransformOutput` that can read
+    itself and whose writes add to it.
+
+    ``dataframe("previous", schema)`` is the dataset as the last successful run
+    left it — memoized, and only readable **before** this run's first write
+    (afterwards it is no longer what it was, and the handle says so rather than
+    answer a mix). While there is nothing yet — the first run, or a run that
+    starts over — it is an empty frame shaped by ``schema``.
+    ``dataframe("current")`` re-reads the dataset as it is now, this run's
+    writes included. ``filesystem("previous")`` is the same for files.
+
+    Writes default to ``modify`` (``APPEND`` into an Iceberg table, one more
+    part file in a files dataset, named after the run so runs never overwrite
+    each other). ``set_mode("replace")``, or ``mode="replace"`` on a write,
+    snapshots instead: the first write of the run replaces, the following ones
+    add to it. A run also starts over by itself when the decorator's
+    ``semantic_version`` is not the one the output was last written with
+    (:attr:`reset`).
+    """
+
+    def __init__(self, client: Any, ref: str, *, semantic_version: int = 1, run_id: Optional[str] = None):
+        super().__init__(client, ref)
+        self.semantic_version = int(semantic_version)
+        self.run_id = run_id or _run_id()
+        self._mode = "modify"
+        self._writes = 0
+        self._previous: Dict[Any, Any] = {}
+        self._entries: Optional[List[Dict[str, Any]]] = None
+        self._reset: Optional[bool] = None
+        self._type: Optional[str] = None
+
+    # -- what the output is ------------------------------------------------
+
+    @property
+    def dataset_type(self) -> str:
+        """``files`` / ``iceberg`` / ``vector``, from the catalog (once)."""
+        if self._type is None:
+            try:
+                info = self._client.datasets.get(self.dataset_id)
+            except Exception:
+                info = {}
+            self._type = (info or {}).get("type") or "files"
+        return self._type
+
+    def _check_writable(self) -> None:
+        if self.dataset_type == "vector":
+            raise GwenlakeException(
+                f"{self.ref}: a vector dataset cannot be an incremental output — its table is "
+                "rebuilt by the embedding transform, not appended to"
+            )
+
+    @property
+    def reset(self) -> bool:
+        """Whether this run starts over: the decorator's ``semantic_version``
+        differs from the one the output was last written with. The build
+        engine records that version after each successful build and exports it
+        as ``CATALOG_INCREMENTAL``; outside a build, or for an output no
+        incremental build has written yet, nothing is recorded and nothing
+        starts over."""
+        if self._reset is None:
+            recorded = _catalog_incremental()
+            was = (recorded.get(self.dataset_id) or {}).get("semantic_version") if recorded else None
+            self._reset = was is not None and int(was) != self.semantic_version
+        return self._reset
+
+    def _previous_entries(self) -> List[Dict[str, Any]]:
+        """The output's files before this run wrote: taken once, and only
+        before the first write."""
+        if self._entries is None:
+            if self._writes:
+                raise GwenlakeException(
+                    f"{self.ref}: the output's previous content must be read before the run's "
+                    "first write — it is no longer what it was"
+                )
+            self._entries = [] if self.reset else list(super().filesystem().ls(glob="**"))
+        return self._entries
+
+    @property
+    def has_previous(self) -> bool:
+        """Whether there is anything to read as ``"previous"``: false on the
+        first run, on an empty output, and when the run starts over."""
+        return bool(self._previous_entries())
+
+    # -- reading ------------------------------------------------------------
+
+    def dataframe(
+        self,
+        mode: str = "previous",
+        schema: Any = None,
+        *,
+        columns: Optional[Iterable[str]] = None,
+        chunk_size: Optional[int] = DEFAULT_CHUNK_SIZE,
+        order_by: Optional[str] = None,
+    ):
+        """The output as a ``pandas.DataFrame``: ``"previous"`` (see the class)
+        or ``"current"``. ``schema`` shapes the empty frame answered while
+        there is no previous content; ``columns`` restricts the projection
+        (``["path"]`` is all a processed-files log needs)."""
+        if mode == "current":
+            return _read_dataframe(
+                self._client, self.ref, columns=columns, chunk_size=chunk_size, order_by=order_by,
+            )
+        if mode != "previous":
+            raise GwenlakeException(f"unknown output mode {mode!r} (use 'previous' or 'current')")
+        key = tuple(columns) if columns is not None else None
+        if key not in self._previous:
+            if self.has_previous:
+                df = _read_dataframe(
+                    self._client, self.ref, columns=columns, chunk_size=chunk_size, order_by=order_by,
+                )
+            else:
+                df = _empty_dataframe(schema)
+            self._previous[key] = df
+        return self._previous[key]
+
+    def filesystem(self, mode: str = "current"):
+        """``"current"``: the live :class:`FileSystem` (reads and writes).
+        ``"previous"``: the files as they were before this run wrote, read-only."""
+        if mode == "current":
+            return super().filesystem()
+        if mode == "previous":
+            return _PreviousFileSystem(super().filesystem(), self._previous_entries())
+        raise GwenlakeException(f"unknown output mode {mode!r} (use 'previous' or 'current')")
+
+    # -- writing ------------------------------------------------------------
+
+    def set_mode(self, mode: str) -> None:
+        """``"modify"`` (add to the dataset, the default) or ``"replace"``
+        (start it over with this run's writes). Before the first write."""
+        if mode not in INCREMENTAL_WRITE_MODES:
+            raise ValueError(f"Unsupported mode '{mode}' (use 'modify' or 'replace')")
+        if self._writes:
+            raise GwenlakeException("set_mode() must be called before the run's first write")
+        self._mode = mode
+
+    def _effective_mode(self, mode: Optional[str]) -> str:
+        """What this write does, in :class:`TransformOutput`'s terms."""
+        mode = mode or self._mode
+        if mode == "append":                 # TransformOutput's own spelling
+            mode = "modify"
+        if mode not in INCREMENTAL_WRITE_MODES:
+            raise ValueError(f"Unsupported mode '{mode}' (use 'modify' or 'replace')")
+        if self._writes:
+            # A run replaces at most once: every write after the first adds to
+            # what the run has written so far.
+            return "append"
+        return "replace" if (mode == "replace" or self.reset) else "append"
+
+    def write_dataframe(
+        self,
+        df: Any,
+        *,
+        filename: Optional[str] = None,
+        format: str = "parquet",
+        mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Write ``df`` into the output — added to it, unless the mode (the
+        handle's, or ``mode=`` here) says ``replace``. ``filename`` defaults
+        to ``part-<run>-<n>.<ext>``, unique to this run."""
+        self._check_writable()
+        effective = self._effective_mode(mode)
+        if filename is None:
+            filename = f"part-{self.run_id}-{self._writes:05d}.{format}"
+        result = super().write_dataframe(df, filename=filename, format=format, mode=effective)
+        self._writes += 1
+        return result
+
+    def write_dataframes(
+        self,
+        dfs: Iterable[Any],
+        *,
+        format: str = "parquet",
+        mode: Optional[str] = None,
+        prefix: str = "part",
+    ) -> List[Dict[str, Any]]:
+        self._check_writable()
+        effective = self._effective_mode(mode)
+        results = super().write_dataframes(
+            dfs, format=format, mode=effective, prefix=f"{prefix}-{self.run_id}-{self._writes:02d}",
+        )
+        self._writes += 1
+        return results
+
+    def finish(self) -> None:
+        """Called by the decorator once the body has returned: a run that
+        starts over (:attr:`reset`) and wrote nothing still empties the
+        output, so a bumped ``semantic_version`` means what it says even when
+        the first run under it finds nothing to write."""
+        if self.reset and not self._writes:
+            self._check_writable()
+            self._client.datasets.empty(self.dataset_id, branch=_catalog_branch())
+            self._writes += 1
+
+
+def _output_handles(
+    client: Any, outputs: Dict[str, "Output"], incremental: Optional[Dict[str, Any]],
+) -> Dict[str, TransformOutput]:
+    """One handle per Output, shared between the body's parameters and the
+    decorator's own writes — so a ``set_mode`` in the body is what the
+    returned DataFrame is written with."""
+    if incremental is None:
+        return {name: TransformOutput(client, spec.ref) for name, spec in outputs.items()}
+    run_id = _run_id()
+    return {
+        name: IncrementalTransformOutput(
+            client, spec.ref, semantic_version=incremental["semantic_version"], run_id=run_id,
+        )
+        for name, spec in outputs.items()
+    }
+
+
+def _finish_outputs(handles: Dict[str, TransformOutput]) -> None:
+    for handle in handles.values():
+        finish = getattr(handle, "finish", None)
+        if finish is not None:
+            finish()
 
 
 # ---------------------------------------------------------------------------
@@ -1286,6 +1677,8 @@ def transform_df(**bindings: Any) -> Callable:
 
         @functools.wraps(fn)
         def wrapper(client: Any) -> Any:
+            # Set by `@incremental` above us, read at call time.
+            handles = _output_handles(client, outputs, getattr(wrapper, "incremental", None))
             call_kwargs: Dict[str, Any] = {}
             for name in params:
                 if name in inputs:
@@ -1299,14 +1692,17 @@ def transform_df(**bindings: Any) -> Callable:
                     call_kwargs[name] = TransformConnection(client, connections[name].ref)
                 elif name in outputs:
                     # Tolerated for parity with the user's snippet; the return
-                    # value is what actually gets written.
-                    call_kwargs[name] = TransformOutput(client, outputs[name].ref)
+                    # value is what actually gets written — through this same
+                    # handle, so an incremental body may read its "previous"
+                    # or `set_mode` it first.
+                    call_kwargs[name] = handles[name]
             result = fn(**call_kwargs)
             if result is None:
+                _finish_outputs(handles)
                 return result
             if len(outputs) == 1:
-                out = next(iter(outputs.values()))
-                TransformOutput(client, out.ref).write_dataframe(result)
+                handles[next(iter(outputs))].write_dataframe(result)
+                _finish_outputs(handles)
                 return result
             if not isinstance(result, dict):
                 raise TypeError(
@@ -1324,10 +1720,12 @@ def transform_df(**bindings: Any) -> Callable:
                 raise TypeError(
                     f"{fn.__name__} returned no DataFrame for Output(s): {sorted(missing)}"
                 )
-            for name, spec in outputs.items():
-                TransformOutput(client, spec.ref).write_dataframe(result[name])
+            for name in outputs:
+                handles[name].write_dataframe(result[name])
+            _finish_outputs(handles)
             return result
 
+        wrapper.kind = "transform_df"
         wrapper.inputs = inputs
         wrapper.outputs = outputs
         wrapper.models = models
@@ -1352,19 +1750,25 @@ def transform(**bindings: Any) -> Callable:
 
         @functools.wraps(fn)
         def wrapper(client: Any) -> Any:
+            incremental = getattr(wrapper, "incremental", None)
+            handles = _output_handles(client, outputs, incremental)
+            input_cls = IncrementalTransformInput if incremental else TransformInput
             call_kwargs: Dict[str, Any] = {}
             for name in params:
                 if name in inputs:
                     spec = inputs[name]
-                    call_kwargs[name] = TransformInput(client, spec.ref, **spec.read_options())
+                    call_kwargs[name] = input_cls(client, spec.ref, **spec.read_options())
                 elif name in models:
                     call_kwargs[name] = TransformModel(client, models[name].ref)
                 elif name in connections:
                     call_kwargs[name] = TransformConnection(client, connections[name].ref)
                 elif name in outputs:
-                    call_kwargs[name] = TransformOutput(client, outputs[name].ref)
-            return fn(**call_kwargs)
+                    call_kwargs[name] = handles[name]
+            result = fn(**call_kwargs)
+            _finish_outputs(handles)
+            return result
 
+        wrapper.kind = "transform"
         wrapper.inputs = inputs
         wrapper.outputs = outputs
         wrapper.models = models
@@ -1420,11 +1824,63 @@ def train(**bindings: _DatasetRef) -> Callable:
                 TransformModel(client, next(iter(outputs.values())).ref).update(metrics=result)
             return result
 
+        wrapper.kind = "train"
         wrapper.inputs = inputs
         wrapper.outputs = outputs
         wrapper.models = models
         wrapper.connections = connections
         return wrapper
+
+    return decorator
+
+
+def incremental(
+    semantic_version: Any = 1,
+    *,
+    snapshot_inputs: Optional[Iterable[str]] = None,
+    require_incremental: bool = False,
+    allow_retention: bool = False,
+) -> Callable:
+    """Make the transform below it incremental — Foundry's decorator, in
+    Foundry's place, above ``@transform`` or ``@transform_df``::
+
+        @incremental(semantic_version=1)
+        @transform(source=Connection("ops.drop-folder"), log=Output("ops.processed"))
+        def ingest(source, log): ...
+
+    Its Outputs become :class:`IncrementalTransformOutput` (``dataframe
+    ("previous", schema)``, writes that add), its ``@transform`` inputs
+    :class:`IncrementalTransformInput`. A ``@transform_df`` body still gets
+    its inputs as DataFrames, whole, and the DataFrame it returns is added to
+    the Output rather than replacing it.
+
+    ``semantic_version`` (an integer) is the one knob that acts: bump it and
+    the next build starts over — ``"previous"`` is empty and the first write
+    replaces. The other three are Foundry's and are accepted so a script
+    ports as is, but do nothing here: ``snapshot_inputs`` because every input
+    already is one (the catalog keeps no transaction log, so there is no
+    ``"added"`` to fall back from), ``require_incremental`` because Atlas never
+    silently falls back to a snapshot build (only an explicit ``replace`` or a
+    version bump starts over), ``allow_retention`` because nothing deletes
+    from an input behind the transform.
+
+    Not for ``@train``: a model is replaced by its training, never appended to.
+    """
+    if callable(semantic_version):
+        # Bare `@incremental` (no parentheses) — Foundry wants them, we don't mind.
+        return incremental()(semantic_version)
+    settings = {"semantic_version": int(semantic_version)}
+
+    def decorator(wrapped: Callable) -> Callable:
+        if not hasattr(wrapped, "outputs"):
+            raise TypeError(
+                "@incremental goes above @transform / @transform_df: "
+                f"{getattr(wrapped, '__name__', wrapped)!r} carries no Output"
+            )
+        if getattr(wrapped, "kind", None) == "train":
+            raise TypeError("@incremental does not apply to @train: a model is replaced by its training, never appended to")
+        wrapped.incremental = settings
+        return wrapped
 
     return decorator
 
