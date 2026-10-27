@@ -177,7 +177,7 @@ def test_incremental_refuses_train():
             pass
 
 
-def test_foundry_options_are_accepted_and_inert():
+def test_inert_options_are_accepted():
     @incremental(snapshot_inputs=["src"], require_incremental=True, allow_retention=True)
     @transform(src=Input("p.fresh"), log=Output("p.log"))
     def fn(src, log):

@@ -1,7 +1,7 @@
-"""Foundry-style transforms over the Gwenlake catalog.
+"""Transforms over the Gwenlake catalog.
 
-Mirrors the Palantir Foundry ``transforms.api`` ergonomics on top of the
-Gwenlake client:
+Decorators that read, compute and write datasets on top of the Gwenlake
+client:
 
     from gwenlake.transforms import transform_df, Input, Output
 
@@ -52,8 +52,8 @@ the connection's credentials never reach the code::
             with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
                 shutil.copyfileobj(src, dst)
 
-``@incremental`` (Foundry's decorator, in Foundry's place: above ``@transform``
-or ``@transform_df``) is for a transform that keeps its own memory in an
+``@incremental`` (stacked above ``@transform`` or ``@transform_df``) is for a
+transform that keeps its own memory in an
 Output — the log of what it has already processed — and reads it back on the
 next run, instead of starting over::
 
@@ -79,8 +79,8 @@ snapshot. Bumping ``semantic_version`` makes the next build start over. An
 Output can never be an Input of the same transform (that is a cycle in the
 lineage); reading it as ``"previous"`` is how it is relied on without one.
 Inputs have no ``"added"`` mode here: the catalog keeps no transaction log, so
-every input is read whole on every run — what Foundry calls a snapshot input —
-and remembering what was done is the Output's job.
+every input is read whole on every run — a *snapshot input* — and remembering
+what was done is the Output's job.
 
 Datasets are addressed as ``"<project_alias>.<dataset_alias>"`` — the same
 handle DuckDB uses in ``FROM '<project>.<dataset>'``. A bare string with no dot
@@ -529,7 +529,7 @@ class _WriteBuffer(io.BytesIO):
 
 
 class FileSystem:
-    """Raw S3-backed file access for a dataset, mirroring Foundry's FileSystem.
+    """Raw S3-backed file access for a dataset.
 
     In a branch build (``CATALOG_BRANCH`` set) every call addresses the branch's
     view: the listing and the reads resolve the overlay over trunk, a delete
@@ -572,7 +572,7 @@ class FileSystem:
             if selector.search(filepath):
                 yield {**entry, "path": filepath, "filename": filepath.rsplit("/", 1)[-1]}
 
-    # Foundry alias
+    # Alias
     files = ls
 
     def read(self, filepath: str) -> bytes:
@@ -601,8 +601,8 @@ class FileSystem:
 
     def clear(self, path: Optional[str] = None) -> int:
         """Delete every file in the dataset (recursively, descending into any
-        sub-folders); returns the number removed. Emulates Foundry's snapshot
-        (replace) write semantics."""
+        sub-folders); returns the number removed. The snapshot (replace) write
+        semantics."""
         removed = 0
         for entry in self.ls(path) or []:
             filepath = _entry_path(entry)
@@ -863,7 +863,7 @@ class TransformOutput:
         """Write a ``pandas.DataFrame`` to the dataset as a single file.
 
         ``mode="replace"`` (default) clears the dataset's existing files first,
-        emulating Foundry's snapshot write; ``mode="append"`` just adds the file
+        a snapshot write; ``mode="append"`` just adds the file
         alongside whatever is already there. ``format`` is ``"parquet"`` (default)
         or ``"csv"``.
         """
@@ -923,7 +923,7 @@ class TransformOutput:
 
 
 # ---------------------------------------------------------------------------
-# Incremental transforms (Foundry's ``@incremental``)
+# Incremental transforms (``@incremental``)
 # ---------------------------------------------------------------------------
 
 #: How an incremental Output takes a write: ``modify`` adds to what is there
@@ -1000,11 +1000,10 @@ _INPUT_MODES = ("current", "added", "previous")
 
 
 class IncrementalTransformInput(TransformInput):
-    """An input under ``@incremental``: :class:`TransformInput` plus Foundry's
+    """An input under ``@incremental``: :class:`TransformInput` plus a
     ``mode`` argument.
 
-    ``"current"`` is the whole dataset. ``"added"`` (Foundry's default under
-    ``@incremental``) and ``"previous"`` exist for an **Iceberg** input inside
+    ``"current"`` is the whole dataset. ``"added"`` and ``"previous"`` exist for an **Iceberg** input inside
     a build: the table's snapshots are its transaction log, the engine pins
     where it stood before the run (``CATALOG_INPUT_SNAPSHOTS``), and the read
     is ``project.dataset@from..to`` — the rows appended since the last
@@ -1041,7 +1040,7 @@ class IncrementalTransformInput(TransformInput):
             raise GwenlakeException(
                 f"{self.ref}: input mode {mode!r} needs an Iceberg input inside a build — the "
                 "catalog keeps no transaction log of a files dataset or a connection, so those "
-                "are always read whole (Foundry's snapshot input). Keep the keys you have "
+                "are always read whole (a snapshot input). Keep the keys you have "
                 "processed in an Output and read them back with output.dataframe('previous')."
             )
         handle = _sql_table(self._client, self.ref)
@@ -1082,7 +1081,7 @@ class IncrementalTransformInput(TransformInput):
         """The input as a ``pandas.DataFrame`` — ``"current"`` (whole),
         ``"added"`` (appended since the last successful run) or
         ``"previous"`` (as the last run saw it). ``schema`` is accepted for
-        Foundry parity; the frame always takes the table's own columns."""
+        symmetry with the outputs; the frame always takes the table's own columns."""
         return self._read(
             mode,
             columns=self.columns if columns is None else columns,
@@ -1946,8 +1945,8 @@ def incremental(
     require_incremental: bool = False,
     allow_retention: bool = False,
 ) -> Callable:
-    """Make the transform below it incremental — Foundry's decorator, in
-    Foundry's place, above ``@transform`` or ``@transform_df``::
+    """Make the transform below it incremental — stacked above ``@transform``
+    or ``@transform_df``::
 
         @incremental(semantic_version=1)
         @transform(source=Connection("ops.drop-folder"), log=Output("ops.processed"))
@@ -1961,8 +1960,8 @@ def incremental(
 
     ``semantic_version`` (an integer) is the one knob that acts: bump it and
     the next build starts over — ``"previous"`` is empty and the first write
-    replaces. The other three are Foundry's and are accepted so a script
-    ports as is, but do nothing here: ``snapshot_inputs`` because every input
+    replaces. The other three are accepted so a script written against the
+    same decorator elsewhere ports as is, but do nothing here: ``snapshot_inputs`` because every input
     already is one (the catalog keeps no transaction log, so there is no
     ``"added"`` to fall back from), ``require_incremental`` because Atlas never
     silently falls back to a snapshot build (only an explicit ``replace`` or a
@@ -1972,7 +1971,7 @@ def incremental(
     Not for ``@train``: a model is replaced by its training, never appended to.
     """
     if callable(semantic_version):
-        # Bare `@incremental` (no parentheses) — Foundry wants them, we don't mind.
+        # Bare `@incremental` (no parentheses) is accepted too.
         return incremental()(semantic_version)
     settings = {"semantic_version": int(semantic_version)}
 

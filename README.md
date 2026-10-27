@@ -108,7 +108,7 @@ Pass a `connection_id` to run the statement against a connection's native engine
 
 ## Transforms
 
-A Palantir Foundry-style transforms layer (`gwenlake.transforms`) lets you write
+A transforms layer (`gwenlake.transforms`) lets you write
 dataset-to-dataset transformations as decorated functions. Datasets (and
 models) are addressed as `"<project_alias>.<alias>"` — the same handle used in
 SQL.
@@ -212,9 +212,9 @@ same calls directly (`list`, `get`, `list_files`, `iter_files`, `download`).
 A transform that must not redo what it has already done keeps its memory in
 one of its **own Outputs** — a log of the files it has processed — and reads
 it back on the next run. An Output can never be an Input of the same
-transform (that is a cycle in the lineage), so `@incremental` — Foundry's
-decorator, in Foundry's place above `@transform` / `@transform_df` — gives
-the Output a `"previous"` reading mode and makes writes **add** to it:
+transform (that is a cycle in the lineage), so `@incremental` — stacked
+above `@transform` / `@transform_df` — gives the Output a `"previous"`
+reading mode and makes writes **add** to it:
 
 ```python
 import pandas as pd

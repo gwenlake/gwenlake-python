@@ -1,4 +1,4 @@
-"""Foundry-style transforms over the Gwenlake catalog.
+"""Transforms over the Gwenlake catalog.
 
 Requires the optional pandas/pyarrow extras: ``pip install gwenlake[transforms]``.
 Uses the default credentials (GWENLAKE_API_KEY env var or the ``default`` profile).
@@ -32,8 +32,8 @@ def clean_adults(raw_users):
 def dedupe_users(my_input, my_output):
     df = my_input.dataframe()
     result = df.drop_duplicates()
-    # mode="replace" (default) clears the dataset before writing (Foundry-style
-    # snapshot); mode="append" adds the file without deleting anything.
+    # mode="replace" (default) clears the dataset before writing (a snapshot);
+    # mode="append" adds the file without deleting anything.
     my_output.write_dataframe(result, mode="replace")
 
 
