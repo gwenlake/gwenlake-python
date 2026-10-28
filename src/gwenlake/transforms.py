@@ -444,6 +444,18 @@ def _read_dataframe(
     return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
 
 
+def _table_has_rows(client: Any, ref: str) -> bool:
+    import httpx
+
+    try:
+        table = _run_arrow(client, f"SELECT 1 AS present FROM '{_sql_table(client, ref)}' LIMIT 1")
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 400 and "has no table yet" in error.response.text:
+            return False
+        raise
+    return table.num_rows > 0
+
+
 def _serialize_df(df: Any, format: str) -> Tuple[bytes, str]:
     """Serialize a DataFrame to bytes; returns (bytes, default_extension)."""
     if not hasattr(df, "to_parquet"):
@@ -1186,6 +1198,7 @@ class IncrementalTransformOutput(TransformOutput):
         self._writes = 0
         self._previous: Dict[Any, Any] = {}
         self._entries: Optional[List[Dict[str, Any]]] = None
+        self._has_rows: Optional[bool] = None
         self._reset: Optional[bool] = None
         self._type: Optional[str] = None
 
@@ -1223,22 +1236,33 @@ class IncrementalTransformOutput(TransformOutput):
             self._reset = was is not None and int(was) != self.semantic_version
         return self._reset
 
+    def _require_unwritten(self) -> None:
+        if self._writes:
+            raise GwenlakeException(
+                f"{self.ref}: the output's previous content must be read before the run's "
+                "first write — it is no longer what it was"
+            )
+
     def _previous_entries(self) -> List[Dict[str, Any]]:
         """The output's files before this run wrote: taken once, and only
         before the first write."""
         if self._entries is None:
-            if self._writes:
-                raise GwenlakeException(
-                    f"{self.ref}: the output's previous content must be read before the run's "
-                    "first write — it is no longer what it was"
-                )
+            self._require_unwritten()
             self._entries = [] if self.reset else list(super().filesystem().ls(glob="**"))
         return self._entries
+
+    def _previous_rows(self) -> bool:
+        if self._has_rows is None:
+            self._require_unwritten()
+            self._has_rows = not self.reset and _table_has_rows(self._client, self.ref)
+        return self._has_rows
 
     @property
     def has_previous(self) -> bool:
         """Whether there is anything to read as ``"previous"``: false on the
         first run, on an empty output, and when the run starts over."""
+        if self.dataset_type == "iceberg":
+            return self._previous_rows()
         return bool(self._previous_entries())
 
     # -- reading ------------------------------------------------------------
