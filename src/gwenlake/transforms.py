@@ -312,7 +312,8 @@ def _sql_table(client: Any, ref: str) -> str:
 
     On a branch build (`CATALOG_BRANCH` set), the `:branch` suffix is appended so
     the read resolves that Iceberg branch — the same `project.dataset:branch`
-    syntax `/sql` understands. Non-Iceberg inputs ignore it server-side."""
+    syntax `/sql` understands. A files input has one version and answers it
+    whatever the suffix, server-side."""
     handle = ref if "." in ref else _ref_to_sql_table(client, ref)
     if "@" in handle:
         # Already a snapshot handle (`project.dataset[:branch]@…`), built by
@@ -531,11 +532,11 @@ class _WriteBuffer(io.BytesIO):
 class FileSystem:
     """Raw S3-backed file access for a dataset.
 
-    In a branch build (``CATALOG_BRANCH`` set) every call addresses the branch's
-    view: the listing and the reads resolve the overlay over trunk, a delete
-    tombstones the path on the branch, and trunk is never touched — writes
-    already carried the branch, reads and deletes did not, so a ``replace`` on
-    a branch used to clear the trunk's files.
+    In a branch build (``CATALOG_BRANCH`` set) every call carries the build's
+    branch. On an Iceberg dataset that is the branch's view; a files dataset
+    has one version, which its reads answer whatever the branch — and which a
+    branch build never writes, since the catalog refuses such a build before
+    it starts.
     """
 
     def __init__(self, client: Any, dataset_id: str):
@@ -1961,11 +1962,15 @@ def incremental(
     ``semantic_version`` (an integer) is the one knob that acts: bump it and
     the next build starts over — ``"previous"`` is empty and the first write
     replaces. The other three are accepted so a script written against the
-    same decorator elsewhere ports as is, but do nothing here: ``snapshot_inputs`` because every input
-    already is one (the catalog keeps no transaction log, so there is no
-    ``"added"`` to fall back from), ``require_incremental`` because Atlas never
-    silently falls back to a snapshot build (only an explicit ``replace`` or a
-    version bump starts over), ``allow_retention`` because nothing deletes
+    same decorator elsewhere ports as is, but do nothing here:
+    ``snapshot_inputs`` because an input is read whole unless the body asks
+    for ``dataframe("added")`` itself — the choice is made per read, not per
+    decorator, and a files dataset or a connection can only be read whole
+    anyway (the catalog keeps a transaction log for Iceberg tables alone);
+    ``require_incremental`` because Atlas never silently falls back to a
+    snapshot build (only an explicit ``replace`` or a version bump starts
+    over, and an ``"added"`` read that has no delta to answer raises rather
+    than reading the table whole); ``allow_retention`` because nothing deletes
     from an input behind the transform.
 
     Not for ``@train``: a model is replaced by its training, never appended to.

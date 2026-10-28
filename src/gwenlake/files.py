@@ -34,8 +34,8 @@ class Files:
     def list(
         self, dataset_id: str, path: Optional[str] = None, *, branch: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        # `branch` reads a data branch's view (files datasets: the overlay
-        # resolved over trunk; Iceberg: ignored, the table's files are listed).
+        # `branch` names an Iceberg data branch. A files dataset has one
+        # version and lists it whatever the value.
         response = self._client.send(
             RequestOptions(
                 method="GET",
@@ -71,8 +71,8 @@ class Files:
         return response.json()
 
     def delete(self, dataset_id: str, filepath: str, *, branch: Optional[str] = None) -> bool:
-        # On a files dataset's branch the path is tombstoned there; trunk is
-        # never touched by a branch delete.
+        # `branch` names an Iceberg data branch. A files dataset has one
+        # version: a delete naming another branch is refused (400).
         response = self._client.send(
             RequestOptions(
                 method="DELETE",
