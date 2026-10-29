@@ -999,6 +999,35 @@ def api_keys_delete(s: Session, api_key_id):
     click.echo("deleted")
 
 
+# -- the global options, after the command too -----------------------------------
+
+def _set_session(attr: str) -> Callable[[click.Context, click.Parameter, Any], None]:
+    def callback(ctx: click.Context, param: click.Parameter, value: Any) -> None:
+        if value:
+            setattr(ctx.find_object(Session), attr, value)
+    return callback
+
+
+_GLOBAL_OPTIONS = [p for p in main.params if isinstance(p, click.Option) and p.name != "version"]
+
+
+def _accept_global_options(group: click.Group) -> None:
+    """`gwenlake datasets list --profile x` as well as `gwenlake --profile x datasets list`:
+    every sub-command takes the global options (hidden), unless it has an option of that name."""
+    for command in group.commands.values():
+        taken = {opt for p in command.params for opt in getattr(p, "opts", [])}
+        for option in _GLOBAL_OPTIONS:
+            if taken.isdisjoint(option.opts):
+                attr = "json" if option.name == "json_output" else option.name
+                command.params.append(click.Option(option.opts, is_flag=option.is_flag, default=None, hidden=True,
+                                                   expose_value=False, callback=_set_session(attr)))
+        if isinstance(command, click.Group):
+            _accept_global_options(command)
+
+
+_accept_global_options(main)
+
+
 def run() -> None:  # pragma: no cover - console entry point with a friendlier error
     try:
         main(standalone_mode=True)

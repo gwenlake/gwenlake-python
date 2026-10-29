@@ -1,6 +1,6 @@
 [project]
 name = "gwenlake"
-version = "0.20.0"
+version = "0.21.0"
 description = "Python client and CLI for the Gwenlake APIs and Gwenlake Atlas"
 readme = "README.md"
 requires-python = ">=3.11"
