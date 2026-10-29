@@ -192,8 +192,22 @@ gwenlake files upload fleetsight.aisdk_positions_raw day.parquet --mode APPEND
 
 Credentials: `--api-key`, `--profile NAME` (a section of `~/.gwenlake/credentials`),
 `GWENLAKE_API_KEY` (a `.env` in the current directory is read), or the `default`
-profile. The endpoint is `--base-url`, `GWENLAKE_BASE_URL`, or the profile's
-`base_url`, which is how a tenant deployed on its own host is reached:
+profile.
+
+## Endpoints
+
+| Short name | URL | Serves |
+| --- | --- | --- |
+| `api` (default) | `https://api.gwenlake.com/v1` | the Gwenlake APIs and the Atlas catalog |
+| `atlas` | `https://atlas.gwenlake.com/api/v1` | the same API, as the Atlas application serves it |
+| a tenant | `https://atlas.acme.example/v1` or `/api/v1` | a platform deployed for one client; give the host, the prefix is probed |
+
+The endpoint is `base_url=` on the client or `--base-url` on the command line,
+else `GWENLAKE_BASE_URL`, else the `base_url` (or `host`) of the credentials
+profile, else `api`. The constants live in `gwenlake.constants`
+(`GWENLAKE_API_URL`, `GWENLAKE_ATLAS_URL`, `KNOWN_ENDPOINTS`), and
+`gwenlake config endpoints` prints them with the one in use. A tenant deployed
+on its own host is reached by naming it:
 
 ```sh
 gwenlake config set-profile acme --token sk-... --base-url https://atlas.acme.example/v1

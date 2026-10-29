@@ -259,6 +259,8 @@ def test_base_url_comes_from_the_profile_when_nothing_else_says(monkeypatch):
     ("https://atlas.gwenlake.com/api/", "https://atlas.gwenlake.com/api/v1"),
     ("https://atlas.gwenlake.com/api/v1/", "https://atlas.gwenlake.com/api/v1"),
     ("http://localhost:8000/v1", "http://localhost:8000/v1"),
+    ("api", "https://api.gwenlake.com/v1"),                               # the short names
+    ("atlas", "https://atlas.gwenlake.com/api/v1"),
 ])
 def test_an_endpoint_is_normalised(given, expected):
     from gwenlake.client import normalise_base_url

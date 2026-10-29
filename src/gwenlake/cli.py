@@ -160,7 +160,7 @@ def _resource_body(name: Optional[str], description: Optional[str], fields: Sequ
 @click.group(cls=_Group, context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--profile", "-p", default=None, envvar="GWENLAKE_PROFILE", help="Section of ~/.gwenlake/credentials to use.")
 @click.option("--api-key", default=None, help="API key (else GWENLAKE_API_KEY, .env, or the profile).")
-@click.option("--base-url", default=None, help="API endpoint, for a tenant on its own host (else GWENLAKE_BASE_URL or the profile's base_url).")
+@click.option("--base-url", default=None, help="API endpoint: 'api' (api.gwenlake.com/v1, the default), 'atlas' (atlas.gwenlake.com/api/v1), or a tenant's host or URL (else GWENLAKE_BASE_URL or the profile's base_url). See `gwenlake config endpoints`.")
 @click.option("--json", "json_output", is_flag=True, help="Print the API's JSON instead of a table.")
 @click.version_option(package_name="gwenlake", prog_name="gwenlake")
 @click.pass_context
@@ -188,6 +188,26 @@ def config() -> None:
 def config_path() -> None:
     """Where the credentials file is."""
     click.echo(Credentials._default_config_path())
+
+
+@config.command("endpoints")
+@pass_session
+@click.pass_context
+def config_endpoints(ctx: click.Context, s: Session) -> None:
+    """The known API endpoints, their short names, and the one this command would use."""
+    from gwenlake.client import _resolve_base_url
+    from gwenlake.constants import KNOWN_ENDPOINTS
+
+    rows = [{"name": name, "url": url, "serves": "the Gwenlake APIs and Atlas under /v1" if name == "api"
+             else "the same API as the Atlas application serves it, under /api/v1"} for name, url in KNOWN_ENDPOINTS.items()]
+    credentials = Credentials.from_profile(s.profile) if s.profile else None
+    current = _resolve_base_url(s.base_url, credentials)
+    if ctx.obj.json:
+        emit(ctx, {"known": KNOWN_ENDPOINTS, "current": current})
+    else:
+        click.echo(table(rows, ("name", "url", "serves")))
+        click.echo(f"\ncurrent: {current}  (from --base-url, GWENLAKE_BASE_URL, the profile's base_url, then the default)")
+        click.echo("a tenant on its own host: --base-url atlas.acme.example (its API prefix, /v1 or /api/v1, is probed by `config set-profile`)")
 
 
 @config.command("list")

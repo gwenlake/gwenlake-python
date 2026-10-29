@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any, Iterator, AsyncIterator, Union, IO, Tupl
 from urllib.parse import quote
 
 from gwenlake.version import __version__
-from gwenlake.constants import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, DEFAULT_CONNECTION_LIMITS
+from gwenlake.constants import DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, DEFAULT_CONNECTION_LIMITS, KNOWN_ENDPOINTS
 from gwenlake.credentials import Credentials
 
 
@@ -286,7 +286,6 @@ from gwenlake.users import AsyncUsers, Users
 # Single gateway: every resource (inference + catalog) is served under /v1, so
 # the base URL carries the version and resource paths are version-agnostic
 # (/models, /datasets, /filesystem/..., /sql/...).
-DEFAULT_BASE_URL = "https://api.gwenlake.com/v1"
 
 
 def _resolve_credentials(
@@ -330,14 +329,17 @@ API_PREFIXES = ("/v1", "/api/v1")
 
 
 def normalise_base_url(url: str) -> str:
-    """An endpoint as the transport wants it: a scheme (https by default), no
-    trailing slash, and the version prefix completed when it is missing: a
-    bare host gets `/v1`, a host with `/api` gets `/api/v1`. Any other path
-    is kept as given. `api.gwenlake.com` -> `https://api.gwenlake.com/v1`,
+    """An endpoint as the transport wants it. A short name of
+    `KNOWN_ENDPOINTS` (`api`, `atlas`) is its URL; otherwise a scheme (https
+    by default), no trailing slash, and the version prefix completed when it
+    is missing: a bare host gets `/v1`, a host with `/api` gets `/api/v1`. Any
+    other path is kept as given. `api.gwenlake.com` -> `https://api.gwenlake.com/v1`,
     `https://atlas.gwenlake.com/api` -> `https://atlas.gwenlake.com/api/v1`.
     Whether a tenant's host serves the API under `/v1` or `/api/v1` is the
     deployment's choice: `gwenlake config set-profile` probes both."""
     url = url.strip().rstrip("/")
+    if url.lower() in KNOWN_ENDPOINTS:
+        return KNOWN_ENDPOINTS[url.lower()]
     if "://" not in url:
         url = "https://" + url
     scheme, _, rest = url.partition("://")

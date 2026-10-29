@@ -130,3 +130,12 @@ def test_the_endpoint_can_be_given_on_the_command_line(monkeypatch):
     monkeypatch.setattr(cli, "make_client", lambda **kw: seen.update(kw) or fake_client(FakeApi({("GET", "/users/me"): {"email": "x"}})))
     assert run("--base-url", "https://atlas.client.example/v1", "--profile", "client", "me").exit_code == 0
     assert seen == {"profile": "client", "api_key": None, "base_url": "https://atlas.client.example/v1"}
+
+
+def test_config_endpoints_lists_the_known_ones(monkeypatch):
+    monkeypatch.delenv("GWENLAKE_BASE_URL", raising=False)
+    out = run("config", "endpoints").output
+    assert "api    https://api.gwenlake.com/v1" in out and "atlas  https://atlas.gwenlake.com/api/v1" in out
+    assert "current: https://api.gwenlake.com/v1" in out
+    out = run("--base-url", "atlas", "config", "endpoints").output
+    assert "current: https://atlas.gwenlake.com/api/v1" in out
