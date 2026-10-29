@@ -1775,6 +1775,11 @@ def _split_bindings(
     return inputs, outputs, models, connections
 
 
+def _step(name: str) -> None:
+    if os.environ.get("CATALOG_BUILD_ID"):
+        print(f"::step::{name}", flush=True)
+
+
 def transform_df(**bindings: Any) -> Callable:
     """Decorate a function that takes ``Input`` DataFrames (by keyword name) and
     returns what gets written to its ``Output``(s).
@@ -1806,7 +1811,7 @@ def transform_df(**bindings: Any) -> Callable:
 
         @functools.wraps(fn)
         def wrapper(client: Any) -> Any:
-            # Set by `@incremental` above us, read at call time.
+            _step("Read inputs")
             handles = _output_handles(client, outputs, getattr(wrapper, "incremental", None))
             call_kwargs: Dict[str, Any] = {}
             for name in params:
@@ -1825,11 +1830,13 @@ def transform_df(**bindings: Any) -> Callable:
                     # handle, so an incremental body may read its "previous"
                     # or `set_mode` it first.
                     call_kwargs[name] = handles[name]
+            _step("Compute")
             result = fn(**call_kwargs)
             if result is None:
                 _finish_outputs(handles)
                 return result
             if len(outputs) == 1:
+                _step("Write outputs")
                 handles[next(iter(outputs))].write_dataframe(result)
                 _finish_outputs(handles)
                 return result
@@ -1849,6 +1856,7 @@ def transform_df(**bindings: Any) -> Callable:
                 raise TypeError(
                     f"{fn.__name__} returned no DataFrame for Output(s): {sorted(missing)}"
                 )
+            _step("Write outputs")
             for name in outputs:
                 handles[name].write_dataframe(result[name])
             _finish_outputs(handles)
@@ -1893,6 +1901,7 @@ def transform(**bindings: Any) -> Callable:
                     call_kwargs[name] = TransformConnection(client, connections[name].ref)
                 elif name in outputs:
                     call_kwargs[name] = handles[name]
+            _step("Compute")
             result = fn(**call_kwargs)
             _finish_outputs(handles)
             return result
@@ -1938,6 +1947,7 @@ def train(**bindings: _DatasetRef) -> Callable:
 
         @functools.wraps(fn)
         def wrapper(client: Any) -> Any:
+            _step("Read inputs")
             call_kwargs: Dict[str, Any] = {}
             for name in params:
                 if name in inputs:
@@ -1948,6 +1958,7 @@ def train(**bindings: _DatasetRef) -> Callable:
                     call_kwargs[name] = TransformConnection(client, connections[name].ref)
                 elif name in outputs:
                     call_kwargs[name] = TransformModel(client, outputs[name].ref)
+            _step("Train")
             result = fn(**call_kwargs)
             if isinstance(result, dict):
                 TransformModel(client, next(iter(outputs.values())).ref).update(metrics=result)
