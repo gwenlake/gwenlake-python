@@ -153,8 +153,9 @@ class Credentials:
 
         Each section is a named profile and may hold either a static ``token``
         (API key) or OAuth2 ``client_id``/``client_secret`` settings, plus an
-        optional ``base_url`` when the profile targets a tenant deployed on
-        its own host (e.g. ``https://atlas.example.com/v1``). Returns ``None``
+        optional ``base_url`` (or ``endpoint`` / ``host``) when the profile
+        targets a tenant deployed on its own host: ``https://atlas.example.com/api/v1``,
+        or just ``atlas.example.com`` (completed to its API prefix). Returns ``None``
         when the file or the requested profile does not exist.
         """
         config_path = cls._default_config_path()
@@ -183,7 +184,9 @@ class Credentials:
             token=info.get("token"),
             hostname=hostname,
             token_uri=token_uri,
-            base_url=info.get("base_url") or info.get("endpoint") or None,
+            # the API endpoint of the profile: `base_url`, or `endpoint` / `host`
+            # (a bare host is completed by the client); `hostname` stays the OAuth server
+            base_url=info.get("base_url") or info.get("endpoint") or info.get("host") or None,
             client_id=info.get("client_id"),
             client_secret=info.get("client_secret"),
             scopes=scopes,

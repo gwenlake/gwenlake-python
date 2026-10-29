@@ -323,13 +323,49 @@ def _resolve_credentials(
     )
 
 
+#: Where a Gwenlake deployment serves its API, relative to a host: an API host
+#: (`api.gwenlake.com`) under `/v1`, an Atlas application host
+#: (`atlas.gwenlake.com`, a tenant's own host) under `/api/v1`.
+API_PREFIXES = ("/v1", "/api/v1")
+
+
+def normalise_base_url(url: str) -> str:
+    """An endpoint as the transport wants it: a scheme (https by default), no
+    trailing slash, and the version prefix completed when it is missing: a
+    bare host gets `/v1`, a host with `/api` gets `/api/v1`. Any other path
+    is kept as given. `api.gwenlake.com` -> `https://api.gwenlake.com/v1`,
+    `https://atlas.gwenlake.com/api` -> `https://atlas.gwenlake.com/api/v1`.
+    Whether a tenant's host serves the API under `/v1` or `/api/v1` is the
+    deployment's choice: `gwenlake config set-profile` probes both."""
+    url = url.strip().rstrip("/")
+    if "://" not in url:
+        url = "https://" + url
+    scheme, _, rest = url.partition("://")
+    host, _, path = rest.partition("/")
+    if not path:
+        return f"{scheme}://{host}/v1"
+    if path == "api":
+        return f"{scheme}://{host}/api/v1"
+    return url
+
+
+def candidate_base_urls(url: str) -> list:
+    """The endpoints a host may serve the API at, the given form first."""
+    first = normalise_base_url(url)
+    scheme, _, rest = first.partition("://")
+    host = rest.partition("/")[0]
+    others = [f"{scheme}://{host}{prefix}" for prefix in API_PREFIXES]
+    return [first] + [u for u in others if u != first]
+
+
 def _resolve_base_url(base_url: Optional[str] = None, credentials: Optional[Credentials] = None) -> str:
     """The API endpoint, in order: the explicit `base_url`, `GWENLAKE_BASE_URL`,
     the `base_url` of the credentials profile, the default gateway. A tenant
     deployed on its own host is reached by naming it in one of these."""
-    return (base_url or os.environ.get("GWENLAKE_BASE_URL")
-            or (getattr(credentials, "base_url", None) if credentials is not None else None)
-            or DEFAULT_BASE_URL)
+    chosen = (base_url or os.environ.get("GWENLAKE_BASE_URL")
+              or (getattr(credentials, "base_url", None) if credentials is not None else None)
+              or DEFAULT_BASE_URL)
+    return normalise_base_url(chosen)
 
 
 def _resolve_user_token(user_token: Optional[str] = None) -> Optional[str]:

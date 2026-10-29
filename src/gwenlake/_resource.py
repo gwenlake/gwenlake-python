@@ -33,6 +33,21 @@ def _options(method: str, url: str, *, params=None, json=None, headers=None, tim
                           timeout=timeout, files=files)
 
 
+def _decode(response) -> Any:
+    """The JSON of an answer; a page of HTML means the URL is not an API
+    endpoint (an Atlas host serves it under /api/v1, an API host under /v1)."""
+    if not response.content:
+        return None
+    content_type = response.headers.get("content-type", "")
+    if "json" not in content_type:
+        raise GwenlakeException(
+            f"{response.request.method} {response.request.url} answered {content_type or 'no content type'} "
+            f"instead of JSON: not an API endpoint. An Atlas host serves the API under /api/v1, an API host "
+            f"under /v1 (see `gwenlake config set-profile --base-url`)."
+        )
+    return response.json()
+
+
 def _unwrap(body: Any) -> Any:
     """The rows of a list answer, whether the catalog wrapped them or not."""
     if isinstance(body, dict) and body.get("object") == "list":
@@ -54,8 +69,7 @@ class Resource:
         return response
 
     def _json(self, method: str, url: str, **kwargs: Any) -> Any:
-        response = self._send(method, url, **kwargs)
-        return response.json() if response.content else None
+        return _decode(self._send(method, url, **kwargs))
 
     def _list(self, method: str, url: str, **kwargs: Any) -> List[Dict[str, Any]]:
         return _unwrap(self._json(method, url, **kwargs))
@@ -80,8 +94,7 @@ class AsyncResource:
         return response
 
     async def _json(self, method: str, url: str, **kwargs: Any) -> Any:
-        response = await self._send(method, url, **kwargs)
-        return response.json() if response.content else None
+        return _decode(await self._send(method, url, **kwargs))
 
     async def _list(self, method: str, url: str, **kwargs: Any) -> List[Dict[str, Any]]:
         return _unwrap(await self._json(method, url, **kwargs))

@@ -250,3 +250,32 @@ def test_base_url_comes_from_the_profile_when_nothing_else_says(monkeypatch):
     assert _resolve_base_url(None, Credentials(token="t")) == "https://env/v1"
     monkeypatch.delenv("GWENLAKE_BASE_URL")
     assert _resolve_base_url(None, Credentials(token="t")) == "https://api.gwenlake.com/v1"
+
+
+@pytest.mark.parametrize("given, expected", [
+    ("atlas.acme.example", "https://atlas.acme.example/v1"),              # a bare host: https and /v1
+    ("https://atlas.acme.example/", "https://atlas.acme.example/v1"),
+    ("https://atlas.gwenlake.com/api", "https://atlas.gwenlake.com/api/v1"),   # an Atlas host serves the API under /api/v1
+    ("https://atlas.gwenlake.com/api/", "https://atlas.gwenlake.com/api/v1"),
+    ("https://atlas.gwenlake.com/api/v1/", "https://atlas.gwenlake.com/api/v1"),
+    ("http://localhost:8000/v1", "http://localhost:8000/v1"),
+])
+def test_an_endpoint_is_normalised(given, expected):
+    from gwenlake.client import normalise_base_url
+
+    assert normalise_base_url(given) == expected
+
+
+def test_candidate_endpoints_of_a_host():
+    from gwenlake.client import candidate_base_urls
+
+    assert candidate_base_urls("atlas.acme.example") == ["https://atlas.acme.example/v1", "https://atlas.acme.example/api/v1"]
+    assert candidate_base_urls("https://atlas.acme.example/api") == ["https://atlas.acme.example/api/v1", "https://atlas.acme.example/v1"]
+
+
+def test_an_html_answer_names_the_endpoint_problem(api, client):
+    import httpx
+
+    api.routes[("GET", "/users/me")] = lambda req: httpx.Response(200, text="<!doctype html>", headers={"content-type": "text/html"}, request=req)
+    with pytest.raises(GwenlakeException, match="not an API endpoint"):
+        client.users.me()

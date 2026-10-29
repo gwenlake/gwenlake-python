@@ -207,22 +207,51 @@ def config_list(ctx: click.Context, s: Session) -> None:
     emit(ctx, rows, ("profile", "auth", "token", "base_url", "hostname"))
 
 
+def probe_endpoint(url: str, token: Optional[str]) -> Optional[str]:
+    """Which of the endpoints a host may serve the API at (`/v1`, `/api/v1`)
+    answers `GET /users/me` with JSON; `None` when none does. Without a token
+    a 401 in JSON counts: the API is there, the key is not."""
+    from gwenlake.client import candidate_base_urls
+
+    for candidate in candidate_base_urls(url):
+        try:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            response = httpx.get(f"{candidate}/users/me", headers=headers, timeout=10, follow_redirects=True)
+        except httpx.HTTPError:
+            continue
+        if "json" in response.headers.get("content-type", "") and response.status_code in (200, 401, 403):
+            return candidate
+    return None
+
+
 @config.command("set-profile")
 @click.argument("name")
 @click.option("--token", default=None, help="API key of the profile.")
-@click.option("--base-url", default=None, help="API endpoint of the profile, e.g. https://atlas.example.com/v1.")
+@click.option("--base-url", default=None, help="API endpoint of the profile: a host (atlas.acme.example), or a URL.")
+@click.option("--probe/--no-probe", default=True, show_default=True, help="Check which path the host serves the API at.")
 @click.option("--client-id", default=None)
 @click.option("--client-secret", default=None)
 @click.option("--hostname", default=None, help="OAuth host for client credentials.")
 @click.option("--scopes", default=None, help="Comma-separated OAuth scopes.")
-def config_set_profile(name: str, token: Optional[str], base_url: Optional[str], client_id: Optional[str],
+def config_set_profile(name: str, token: Optional[str], base_url: Optional[str], probe: bool, client_id: Optional[str],
                        client_secret: Optional[str], hostname: Optional[str], scopes: Optional[str]) -> None:
-    """Create or update a profile. Only the given options change."""
+    """Create or update a profile. Only the given options change.
+
+    With --base-url, the host is probed for the API (/v1 or /api/v1) and the
+    working endpoint is stored; --no-probe stores the URL as normalised."""
     path = Credentials._default_config_path()
     parser = configparser.ConfigParser()
     parser.read(path)
     if not parser.has_section(name):
         parser.add_section(name)
+    if base_url:
+        from gwenlake.client import normalise_base_url
+
+        key = token or parser[name].get("token")
+        found = probe_endpoint(base_url, key) if probe else None
+        if probe and found is None:
+            raise click.ClickException(f"no API found at {base_url} (tried /v1 and /api/v1); check the host or pass --no-probe")
+        base_url = found or normalise_base_url(base_url)
     for key, value in {"token": token, "base_url": base_url, "client_id": client_id, "client_secret": client_secret,
                        "hostname": hostname, "scopes": scopes}.items():
         if value is not None:
@@ -234,7 +263,7 @@ def config_set_profile(name: str, token: Optional[str], base_url: Optional[str],
         os.chmod(path, 0o600)
     except OSError:  # pragma: no cover - Windows
         pass
-    click.echo(f"profile '{name}' written to {path}")
+    click.echo(f"profile '{name}' written to {path}" + (f" (endpoint {base_url})" if base_url else ""))
 
 
 @config.command("remove-profile")

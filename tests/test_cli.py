@@ -100,18 +100,29 @@ def test_transform_parameters_accept_json_values(api):
 def test_config_profiles_are_written_to_the_credentials_file(monkeypatch, tmp_path):
     path = tmp_path / "credentials"
     monkeypatch.setattr(cli.Credentials, "_default_config_path", staticmethod(lambda: str(path)))
-    result = run("config", "set-profile", "client", "--token", "sk-1234567890abcdef", "--base-url", "https://atlas.client.example/v1")
-    assert result.exit_code == 0 and path.exists()
-    assert "[client]" in path.read_text() and "base_url = https://atlas.client.example/v1" in path.read_text()
+    probed = []
+    monkeypatch.setattr(cli, "probe_endpoint", lambda url, token: probed.append((url, token)) or "https://atlas.client.example/api/v1")
+    result = run("config", "set-profile", "client", "--token", "sk-1234567890abcdef", "--base-url", "atlas.client.example")
+    assert result.exit_code == 0 and path.exists() and probed == [("atlas.client.example", "sk-1234567890abcdef")]
+    assert "[client]" in path.read_text() and "base_url = https://atlas.client.example/api/v1" in path.read_text()
+    result = run("config", "set-profile", "client", "--base-url", "atlas.client.example/api", "--no-probe")
+    assert result.exit_code == 0 and "base_url = https://atlas.client.example/api/v1" in path.read_text()
+    monkeypatch.setattr(cli, "probe_endpoint", lambda url, token: None)
+    result = run("config", "set-profile", "client", "--base-url", "nowhere.example")
+    assert result.exit_code == 1 and "no API found" in result.output
     out = run("config", "list").output
     assert "client" in out and "sk-123...cdef" in out and "sk-1234567890abcdef" not in out
     assert run("config", "remove-profile", "client").exit_code == 0 and "[client]" not in path.read_text()
     assert run("config", "path").output.strip() == str(path)
 
     from gwenlake.credentials import Credentials
-    (tmp_path / "credentials").write_text("[tenant]\ntoken = t\nbase_url = https://tenant/v1\n")
+    (tmp_path / "credentials").write_text("[tenant]\ntoken = t\nbase_url = https://tenant/v1\n\n[acme]\ntoken = t\nhost = atlas.acme.example\n")
     monkeypatch.setattr(Credentials, "_default_config_path", staticmethod(lambda: str(path)))
     assert Credentials.from_profile("tenant").base_url == "https://tenant/v1"
+    assert Credentials.from_profile("acme").base_url == "atlas.acme.example"            # completed by the client:
+    from gwenlake.client import _resolve_base_url
+    monkeypatch.delenv("GWENLAKE_BASE_URL", raising=False)
+    assert _resolve_base_url(None, Credentials.from_profile("acme")) == "https://atlas.acme.example/v1"
 
 
 def test_the_endpoint_can_be_given_on_the_command_line(monkeypatch):
