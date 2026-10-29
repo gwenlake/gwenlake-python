@@ -1,7 +1,7 @@
 import json
 import httpx
 from datetime import datetime, timezone
-from pydantic import BaseModel, ConfigDict
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Iterator, AsyncIterator, Union, IO, Tuple, Mapping, Sequence, TypeVar
 from urllib.parse import quote
 
@@ -25,19 +25,20 @@ HttpxFileTypes = Union[
 HttpxRequestFiles = Union[Mapping[str, HttpxFileTypes], Sequence[Tuple[str, HttpxFileTypes]]]
 
 
-class RequestOptions(BaseModel):
+@dataclass
+class RequestOptions:
+    """One request to the API, as a resource describes it to the transport."""
+
     method: str
     url: str
-    path_params: Optional[Dict[str, Any]] = {}
-    params: Optional[Dict[str, Any]] = {}
-    headers: Optional[Dict[str, Any]] = {}
+    path_params: Optional[Dict[str, Any]] = field(default_factory=dict)
+    params: Optional[Dict[str, Any]] = field(default_factory=dict)
+    headers: Optional[Dict[str, Any]] = field(default_factory=dict)
     max_retries: Optional[int] = None
     timeout: Optional[float] = None
-    json_data: Optional[Dict[str, Any]] = None
+    json_data: Optional[Any] = None
     files: Optional[HttpxRequestFiles] = None
     follow_redirects: Optional[bool] = None
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 _IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -261,6 +262,25 @@ from gwenlake.files import Files, AsyncFiles
 from gwenlake.projects import Projects, AsyncProjects
 from gwenlake.statements import Statements, AsyncStatements
 from gwenlake.connections import Connections, AsyncConnections
+from gwenlake.agents import Agents, AsyncAgents
+from gwenlake.api_keys import ApiKeys, AsyncApiKeys
+from gwenlake.applications import Applications, AsyncApplications
+from gwenlake.builds import AsyncBuilds, Builds
+from gwenlake.catalog_transforms import AsyncTransforms, Transforms
+from gwenlake.filesystem import AsyncFilesystem, Filesystem
+from gwenlake.flows import AsyncFlows, Flows
+from gwenlake.lineage import AsyncLineage, Lineage
+from gwenlake.mediasets import AsyncMediasets, Mediasets
+from gwenlake.mlmodels import AsyncMLModels, MLModels
+from gwenlake.ontologies import AsyncOntologies, Ontologies
+from gwenlake.organizations import AsyncOrganizations, Organizations
+from gwenlake.queries import AsyncQueries, Queries
+from gwenlake.repositories import AsyncRepositories, Repositories
+from gwenlake.schedules import AsyncSchedules, Schedules
+from gwenlake.skills import AsyncSkills, Skills
+from gwenlake.syncs import AsyncSyncs, Syncs
+from gwenlake.tools import AsyncTools, Tools
+from gwenlake.users import AsyncUsers, Users
 
 
 # Single gateway: every resource (inference + catalog) is served under /v1, so
@@ -303,8 +323,13 @@ def _resolve_credentials(
     )
 
 
-def _resolve_base_url(base_url: Optional[str] = None) -> str:
-    return base_url or os.environ.get("GWENLAKE_BASE_URL") or DEFAULT_BASE_URL
+def _resolve_base_url(base_url: Optional[str] = None, credentials: Optional[Credentials] = None) -> str:
+    """The API endpoint, in order: the explicit `base_url`, `GWENLAKE_BASE_URL`,
+    the `base_url` of the credentials profile, the default gateway. A tenant
+    deployed on its own host is reached by naming it in one of these."""
+    return (base_url or os.environ.get("GWENLAKE_BASE_URL")
+            or (getattr(credentials, "base_url", None) if credentials is not None else None)
+            or DEFAULT_BASE_URL)
 
 
 def _resolve_user_token(user_token: Optional[str] = None) -> Optional[str]:
@@ -320,7 +345,15 @@ def _resolve_user_token(user_token: Optional[str] = None) -> Optional[str]:
 
 class Gwenlake:
     """Unified Gwenlake client exposing every API resource through a single
-    authenticated transport (inference + catalog via one gateway)."""
+    authenticated transport: the inference APIs (models, chat, embeddings) and
+    the Gwenlake Atlas catalog (projects, datasets, files, SQL, transforms,
+    builds, schedules, lineage, repositories, models, agents...).
+
+    `resolve(ref)` turns a ``"<project>.<dataset>"`` reference into a dataset id."""
+
+    def resolve(self, ref: str) -> str:
+        """The dataset id behind ``"<project alias>.<dataset alias>"`` (ids pass through)."""
+        return self.datasets.resolve(ref)
 
     models: Models
     chat: Chat
@@ -330,6 +363,25 @@ class Gwenlake:
     projects: Projects
     statements: Statements
     connections: Connections
+    schedules: Schedules
+    transforms: Transforms
+    builds: Builds
+    lineage: Lineage
+    repositories: Repositories
+    queries: Queries
+    ml_models: MLModels
+    mediasets: Mediasets
+    flows: Flows
+    syncs: Syncs
+    organizations: Organizations
+    users: Users
+    api_keys: ApiKeys
+    filesystem: Filesystem
+    agents: Agents
+    ontologies: Ontologies
+    skills: Skills
+    tools: Tools
+    applications: Applications
 
     def __init__(
         self,
@@ -348,7 +400,7 @@ class Gwenlake:
             None if self._user_token
             else _resolve_credentials(api_key=api_key, credentials=credentials, profile=profile)
         )
-        self._base_url = _resolve_base_url(base_url)
+        self._base_url = _resolve_base_url(base_url, self._credentials)
         self._client = ApiClient(
             base_url=self._base_url,
             credentials=self._credentials,
@@ -365,6 +417,25 @@ class Gwenlake:
         self.projects = Projects(self._client)
         self.statements = Statements(self._client)
         self.connections = Connections(self._client)
+        self.schedules = Schedules(self._client)
+        self.transforms = Transforms(self._client)
+        self.builds = Builds(self._client)
+        self.lineage = Lineage(self._client)
+        self.repositories = Repositories(self._client)
+        self.queries = Queries(self._client)
+        self.ml_models = MLModels(self._client)
+        self.mediasets = Mediasets(self._client)
+        self.flows = Flows(self._client)
+        self.syncs = Syncs(self._client)
+        self.organizations = Organizations(self._client)
+        self.users = Users(self._client)
+        self.api_keys = ApiKeys(self._client)
+        self.filesystem = Filesystem(self._client)
+        self.agents = Agents(self._client)
+        self.ontologies = Ontologies(self._client)
+        self.skills = Skills(self._client)
+        self.tools = Tools(self._client)
+        self.applications = Applications(self._client)
 
 
 class AsyncGwenlake:
@@ -396,7 +467,7 @@ class AsyncGwenlake:
             None if self._user_token
             else _resolve_credentials(api_key=api_key, credentials=credentials, profile=profile)
         )
-        self._base_url = _resolve_base_url(base_url)
+        self._base_url = _resolve_base_url(base_url, self._credentials)
         self._client = AsyncApiClient(
             base_url=self._base_url,
             credentials=self._credentials,
@@ -413,3 +484,22 @@ class AsyncGwenlake:
         self.projects = AsyncProjects(self._client)
         self.statements = AsyncStatements(self._client)
         self.connections = AsyncConnections(self._client)
+        self.schedules = AsyncSchedules(self._client)
+        self.transforms = AsyncTransforms(self._client)
+        self.builds = AsyncBuilds(self._client)
+        self.lineage = AsyncLineage(self._client)
+        self.repositories = AsyncRepositories(self._client)
+        self.queries = AsyncQueries(self._client)
+        self.ml_models = AsyncMLModels(self._client)
+        self.mediasets = AsyncMediasets(self._client)
+        self.flows = AsyncFlows(self._client)
+        self.syncs = AsyncSyncs(self._client)
+        self.organizations = AsyncOrganizations(self._client)
+        self.users = AsyncUsers(self._client)
+        self.api_keys = AsyncApiKeys(self._client)
+        self.filesystem = AsyncFilesystem(self._client)
+        self.agents = AsyncAgents(self._client)
+        self.ontologies = AsyncOntologies(self._client)
+        self.skills = AsyncSkills(self._client)
+        self.tools = AsyncTools(self._client)
+        self.applications = AsyncApplications(self._client)

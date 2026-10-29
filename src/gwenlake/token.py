@@ -1,16 +1,21 @@
 import time
+from dataclasses import dataclass
 from typing import Any, Optional, Dict
-from pydantic import BaseModel
 
 
-class OAuthTokenResponse(BaseModel):
+@dataclass
+class OAuthTokenResponse:
     access_token: str
     token_type: Optional[str] = "Bearer"
     expires_in: Optional[int] = None
     refresh_token: Optional[str] = None
 
     def __init__(self, token_response: Dict[str, Any]) -> None:
-        super().__init__(**token_response)
+        """Built from the token endpoint's JSON; unknown fields are ignored."""
+        self.access_token = token_response["access_token"]
+        self.token_type = token_response.get("token_type") or "Bearer"
+        self.expires_in = token_response.get("expires_in")
+        self.refresh_token = token_response.get("refresh_token")
 
     @classmethod
     def from_token(cls, token: str):

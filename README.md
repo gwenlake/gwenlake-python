@@ -1,8 +1,11 @@
 # Gwenlake Python Library
 
-The Gwenlake Python library provides convenient access to the Gwenlake API
-from applications written in Python. A single `Gwenlake` client gives you access
-to your catalog — projects, datasets, files and SQL.
+The Gwenlake Python library gives applications written in Python access to the
+Gwenlake APIs (inference: models, chat completions, embeddings) and to
+**Gwenlake Atlas**, the data platform: projects, datasets, files, SQL,
+transforms, builds, schedules, lineage, repositories, models, agents. One
+`Gwenlake` client wraps every resource behind one authenticated transport, and
+the `gwenlake` command (alias `gwl`) offers the same from the terminal.
 
 ## Installation
 
@@ -105,6 +108,100 @@ for row in result["data"]:
 
 Pass a `connection_id` to run the statement against a connection's native engine
 (PostgreSQL, S3, …) instead of a dataset.
+
+### Read a result whole, export it
+
+`statements.create` answers one request, capped at 1000 rows unless the
+statement carries its own `LIMIT`. To read a result whole, the library pages
+it (`LIMIT`/`OFFSET` around your statement) and gives it back as Arrow, as a
+DataFrame, or written to a file whose format follows its extension:
+
+```python
+table = client.statements.read_all("SELECT * FROM 'fleetsight.aisdk_positions' WHERE zone = 'brest'")
+df = client.statements.to_dataframe("SELECT * FROM 'fleetsight.aisdk_vessels'")
+
+client.statements.to_file("SELECT * FROM 'fleetsight.aisdk_positions'", "positions.parquet")
+client.statements.to_file("SELECT mmsi, name FROM 'fleetsight.aisdk_vessels'", "vessels.csv")
+client.statements.to_file("SELECT * FROM 'fleetsight.aisdk_vessels'", "vessels.jsonl")   # or .json, one array
+
+for page in client.statements.iter_arrow("SELECT * FROM 'fleetsight.aisdk_positions'", page_rows=100_000):
+    ...   # pyarrow.Table, 100 000 rows at a time
+```
+
+## Atlas resources
+
+Every route of the Atlas catalog has a method, under the resource it belongs
+to. Datasets are referred to by id, or by `"<project>.<dataset>"` through
+`client.resolve(ref)`.
+
+| Attribute | Covers |
+| --- | --- |
+| `client.projects`, `client.filesystem` | projects, folders, search, move/rename/restore of any resource |
+| `client.datasets`, `client.files` | datasets (create, update, summary, branches, `delete_rows`, maintenance, search) and their files |
+| `client.statements`, `client.queries` | ad hoc SQL, stored SQL queries and their versions |
+| `client.transforms` | the producers of the lineage (`set_parameters`, `execute`, `functions`) |
+| `client.builds` | builds (`run`, `wait`, `run_and_wait`, `logs`, `cancel`) and asynchronous tasks |
+| `client.schedules` | cron schedules (`time_trigger`, `build_action`, `trigger`, `enable`) |
+| `client.lineage` | the lineage graph, data branches of a lineage cone, workflow positions |
+| `client.repositories` | repositories, `scan_lineage`, and the git routes (tree, file, commit, branches) |
+| `client.connections` | connections, their files, `query`, `test`, credentials |
+| `client.ml_models`, `client.mediasets`, `client.syncs`, `client.flows` | ML models, mediasets, syncs, flows |
+| `client.agents`, `client.skills`, `client.tools`, `client.ontologies`, `client.applications` | agents and what they use |
+| `client.organizations`, `client.users`, `client.api_keys` | the tenant, you, the keys |
+
+```python
+dataset = client.resolve("fleetsight.aisdk_positions")
+
+batch = client.builds.run_and_wait(dataset, target_only=True)       # build it, follow it
+print(client.builds.logs(batch["builds"][-1]["id"])["logs"])
+
+from gwenlake.schedules import build_action, time_trigger
+client.schedules.create({"name": "Nightly refresh", "project_id": project_id,
+                         "trigger": time_trigger("0 6 * * *", "Europe/Paris"),
+                         "action": build_action(dataset), "enabled": True})
+
+scan = client.repositories.scan_lineage(repository_id, wait=True)    # re-read the code's producers
+print(scan["result"]["transforms_found"], scan["result"]["warnings"])
+
+client.transforms.set_parameters(transform_id, {"listen_seconds": 600})
+```
+
+`tests/test_openapi_coverage.py` checks that every route of the catalog's
+OpenAPI description has a method; a route left out on purpose is listed there.
+
+## Command line
+
+Installing the library adds `gwenlake` (and the shorter `gwl`): the same
+resources in noun-verb form, printing tables or, with `--json`, the API's answer.
+
+```sh
+gwenlake me
+gwenlake projects list
+gwenlake datasets list --project fleetsight
+gwenlake datasets summary fleetsight.aisdk_positions
+gwenlake sql "SELECT zone, count(*) FROM 'fleetsight.aisstream_positions' GROUP BY 1"
+gwenlake sql "SELECT * FROM 'fleetsight.aisdk_vessels'" --out vessels.parquet       # or .csv, .json, .jsonl
+gwenlake datasets export fleetsight.aisdk_positions --out positions.csv --where "zone = 'brest'"
+gwenlake builds run fleetsight.aisstream_vessels --wait
+gwenlake builds logs build.58d2bddbad62
+gwenlake schedules create --project fleetsight --name "Nightly" --cron "0 6 * * *" --time-zone Europe/Paris --target fleetsight.aisdk_quality_by_day
+gwenlake repositories scan res.repository.… --wait
+gwenlake transforms set-parameters res.transform.… listen_seconds=600
+gwenlake files upload fleetsight.aisdk_positions_raw day.parquet --mode APPEND
+```
+
+Credentials: `--api-key`, `--profile NAME` (a section of `~/.gwenlake/credentials`),
+`GWENLAKE_API_KEY` (a `.env` in the current directory is read), or the `default`
+profile. The endpoint is `--base-url`, `GWENLAKE_BASE_URL`, or the profile's
+`base_url`, which is how a tenant deployed on its own host is reached:
+
+```sh
+gwenlake config set-profile acme --token sk-... --base-url https://atlas.acme.example/v1
+gwenlake --profile acme datasets list
+gwenlake config list        # the profiles, secrets masked
+```
+
+`gwenlake <resource> --help` lists the commands of a resource.
 
 ## Transforms
 

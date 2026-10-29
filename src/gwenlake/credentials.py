@@ -4,7 +4,7 @@ import threading
 import logging
 import httpx
 from typing import Any, List, Optional, Dict
-from pydantic import BaseModel
+from dataclasses import dataclass, field
 
 from gwenlake.flow import ClientOAuthFlowProvider
 from gwenlake.token import OAuthToken, OAuthTokenResponse
@@ -17,10 +17,13 @@ TOKEN_REQUEST_PATH = "/protocol/openid-connect/token"
 logger = logging.getLogger(__name__)
 
 
-class SignInResponse(BaseModel):
-    session: Dict[str, Any]
+@dataclass
+class SignInResponse:
+    session: Dict[str, Any] = field(default_factory=dict)
 
-class SignOutResponse(BaseModel):
+
+@dataclass
+class SignOutResponse:
     pass
 
 
@@ -36,10 +39,14 @@ class Credentials:
         client_secret: Optional[str] = None,
         scopes: Optional[List[str]] = None,
         should_refresh: bool = True,
+        base_url: Optional[str] = None,
     ):
         
         self._token = OAuthToken(token=OAuthTokenResponse.from_token(token)) if token else None
         self._hostname = hostname
+        #: The API endpoint these credentials are for, when the profile names
+        #: one (a tenant deployed on its own host); `None` means the default.
+        self.base_url = base_url
         self._token_uri = token_uri
         self._client_id = client_id
         self._client_secret = client_secret
@@ -145,8 +152,10 @@ class Credentials:
         """Load credentials from the ``~/.gwenlake/credentials`` INI file.
 
         Each section is a named profile and may hold either a static ``token``
-        (API key) or OAuth2 ``client_id``/``client_secret`` settings. Returns
-        ``None`` when the file or the requested profile does not exist.
+        (API key) or OAuth2 ``client_id``/``client_secret`` settings, plus an
+        optional ``base_url`` when the profile targets a tenant deployed on
+        its own host (e.g. ``https://atlas.example.com/v1``). Returns ``None``
+        when the file or the requested profile does not exist.
         """
         config_path = cls._default_config_path()
 
@@ -174,6 +183,7 @@ class Credentials:
             token=info.get("token"),
             hostname=hostname,
             token_uri=token_uri,
+            base_url=info.get("base_url") or info.get("endpoint") or None,
             client_id=info.get("client_id"),
             client_secret=info.get("client_secret"),
             scopes=scopes,

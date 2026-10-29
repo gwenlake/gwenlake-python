@@ -33,6 +33,7 @@ from typing import IO, Any, Dict, Iterator, List, Optional, AsyncIterator, Tuple
 import httpx
 
 from gwenlake.client import ApiClient, AsyncApiClient, RequestOptions
+from gwenlake._resource import AsyncResource as _AR, Resource as _R
 from gwenlake.exceptions import GwenlakeException
 
 SPOOL_MEMORY_BYTES = 64 * 1024 * 1024
@@ -237,6 +238,37 @@ class Connections:
             response.raise_for_status()
         return response
 
+    # -- the resource itself -----------------------------------------------
+
+    def create(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """`data`: `name`, `project_id`, `configuration` (type and its fields,
+        secrets included: they are stored server-side and never read back)."""
+        return _R(self._client)._json("POST", "/connections", json=data)
+
+    def update(self, connection_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return _R(self._client)._json("PATCH", f"/connections/{connection_id}", json=data)
+
+    def delete(self, connection_id: str) -> bool:
+        return _R(self._client)._ok("DELETE", f"/connections/{connection_id}")
+
+    def rotate_credentials(self, connection_id: str, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace the secret fields of the connection without touching the rest."""
+        return _R(self._client)._json("PUT", f"/connections/{connection_id}/credentials", json={"credentials": credentials})
+
+    def test(self, connection_id: str) -> Any:
+        """Ask the platform to reach the source with the stored configuration."""
+        return _R(self._client)._json("POST", f"/connections/{connection_id}/test")
+
+    def test_configuration(self, project_id: str, configuration: Dict[str, Any]) -> Any:
+        """Try a configuration before creating the connection."""
+        return _R(self._client)._json("POST", "/connections/test", json={"project_id": project_id, "configuration": configuration})
+
+    def query(self, connection_id: str, query: str, *, parameters: Optional[Dict[str, Any]] = None,
+              limit: Optional[int] = None) -> Any:
+        """Run a query on a database connection, through the platform."""
+        body = {k: v for k, v in {"query": query, "parameters": parameters, "limit": limit}.items() if v is not None}
+        return _R(self._client)._json("POST", f"/connections/{connection_id}/query", json=body)
+
 
 class AsyncConnections:
 
@@ -332,6 +364,37 @@ class AsyncConnections:
                 await response.aclose()
             response.raise_for_status()
         return response
+
+    # -- the resource itself (async) -----------------------------------------------
+
+    async def create(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """`data`: `name`, `project_id`, `configuration` (type and its fields,
+        secrets included: they are stored server-side and never read back)."""
+        return await _AR(self._client)._json("POST", "/connections", json=data)
+
+    async def update(self, connection_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return await _AR(self._client)._json("PATCH", f"/connections/{connection_id}", json=data)
+
+    async def delete(self, connection_id: str) -> bool:
+        return await _AR(self._client)._ok("DELETE", f"/connections/{connection_id}")
+
+    async def rotate_credentials(self, connection_id: str, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace the secret fields of the connection without touching the rest."""
+        return await _AR(self._client)._json("PUT", f"/connections/{connection_id}/credentials", json={"credentials": credentials})
+
+    async def test(self, connection_id: str) -> Any:
+        """Ask the platform to reach the source with the stored configuration."""
+        return await _AR(self._client)._json("POST", f"/connections/{connection_id}/test")
+
+    async def test_configuration(self, project_id: str, configuration: Dict[str, Any]) -> Any:
+        """Try a configuration before creating the connection."""
+        return await _AR(self._client)._json("POST", "/connections/test", json={"project_id": project_id, "configuration": configuration})
+
+    async def query(self, connection_id: str, query: str, *, parameters: Optional[Dict[str, Any]] = None,
+              limit: Optional[int] = None) -> Any:
+        """Run a query on a database connection, through the platform."""
+        body = {k: v for k, v in {"query": query, "parameters": parameters, "limit": limit}.items() if v is not None}
+        return await _AR(self._client)._json("POST", f"/connections/{connection_id}/query", json=body)
 
 
 class _RelayFile(io.RawIOBase):
