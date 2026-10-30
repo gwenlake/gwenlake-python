@@ -451,7 +451,7 @@ def datasets_branches(ctx, s: Session, dataset):
 
 @datasets.command("export")
 @click.argument("dataset")
-@click.option("--out", "-o", required=True, type=click.Path(dir_okay=False), help="Output file: .parquet, .csv, .json or .jsonl.")
+@click.option("--out", "-o", required=True, type=click.Path(dir_okay=False), help="Output file: .parquet, .csv, .json or .jsonl; - for stdout (with --format).")
 @click.option("--format", "fmt", default=None, type=click.Choice(["parquet", "csv", "json", "jsonl"]), help="Override the extension.")
 @click.option("--where", default=None, help="A WHERE clause without the keyword.")
 @click.option("--columns", default="*", show_default=True, help="Comma-separated columns.")
@@ -461,7 +461,19 @@ def datasets_export(s: Session, dataset, out, fmt, where, columns, page_rows):
     """Write the whole dataset (or a filtered part of it) to a file."""
     ref = dataset if "." in dataset and not dataset.startswith("res.") else _ref_of(s, dataset)
     statement = f"SELECT {columns} FROM '{ref}'" + (f" WHERE {where}" if where else "")
-    rows = s.client.statements.to_file(statement, out, format=fmt, page_rows=page_rows)
+    _to_file(s, statement, out, fmt, page_rows=page_rows)
+
+
+def _to_file(s: Session, statement: str, out: str, fmt, **kwargs) -> None:
+    """The whole result into `out`; `-` is stdout (a pipe, ssh), whose bytes
+    must stay the data alone, so the row count goes to stderr then."""
+    if out == "-":
+        if not fmt:
+            raise click.ClickException("--out - writes to stdout: give --format (parquet, csv, json, jsonl)")
+        rows = s.client.statements.to_file(statement, click.get_binary_stream("stdout"), format=fmt, **kwargs)
+        click.echo(f"{rows} rows written to stdout", err=True)
+        return
+    rows = s.client.statements.to_file(statement, out, format=fmt, **kwargs)
     click.echo(f"{rows} rows written to {out}")
 
 
@@ -531,7 +543,7 @@ def files_delete(s: Session, dataset, filepath, branch):
 @main.command()
 @click.argument("statement", required=False)
 @click.option("--file", "-f", "sql_file", type=click.Path(exists=True, dir_okay=False), help="Read the statement from a file.")
-@click.option("--out", "-o", default=None, type=click.Path(dir_okay=False), help="Write the whole result to .parquet, .csv, .json or .jsonl.")
+@click.option("--out", "-o", default=None, type=click.Path(dir_okay=False), help="Write the whole result to .parquet, .csv, .json or .jsonl; - for stdout (with --format).")
 @click.option("--format", "fmt", default=None, type=click.Choice(["parquet", "csv", "json", "jsonl"]), help="Override the extension of --out.")
 @click.option("--limit", default=None, type=int, help="Row cap when printing (default: the server's 1000).")
 @click.option("--page-rows", default=50_000, show_default=True, type=int, help="Rows per request when writing a file.")
@@ -548,8 +560,7 @@ def sql(ctx, s: Session, statement, sql_file, out, fmt, limit, page_rows, mode):
     if not statement:
         raise click.ClickException("give a statement or --file")
     if out:
-        rows = s.client.statements.to_file(statement, out, format=fmt, page_rows=page_rows, mode=mode)
-        click.echo(f"{rows} rows written to {out}")
+        _to_file(s, statement, out, fmt, page_rows=page_rows, mode=mode)
         return
     table_ = s.client.statements.read_arrow(statement, limit=limit, mode=mode)
     rows = table_.to_pylist()

@@ -59,6 +59,18 @@ def test_sql_prints_rows_or_writes_a_file(api, tmp_path):
     assert result.exit_code == 0 and "2 rows written" in result.output and target.exists()
 
 
+def test_sql_writes_to_stdout(api):
+    import io
+    import pyarrow.parquet as pq
+
+    api.routes[("POST", "/sql/statements")] = _ipc(pa.table({"zone": ["brest", "gulf_of_lion"]}))
+    result = CliRunner().invoke(cli.main, ["sql", "SELECT 1", "-o", "-", "--format", "parquet"], catch_exceptions=False)
+    assert result.exit_code == 0 and "2 rows written to stdout" in result.stderr
+    assert pq.read_table(io.BytesIO(result.stdout_bytes)).column("zone").to_pylist() == ["brest", "gulf_of_lion"]
+    result = CliRunner().invoke(cli.main, ["sql", "SELECT 1", "-o", "-"])
+    assert result.exit_code != 0 and "--format" in result.output
+
+
 def test_export_writes_a_whole_dataset(api, tmp_path):
     table = pa.table({"id": [1, 2]})
     api.routes[("POST", "/sql/statements")] = _ipc(table)

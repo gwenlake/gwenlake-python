@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Any, BinaryIO, Dict, Iterator, Optional, Union
 
 from gwenlake.client import ApiClient, AsyncApiClient, RequestOptions
 from gwenlake.exceptions import GwenlakeException
@@ -70,12 +70,14 @@ def _has_limit(statement: str) -> bool:
     return re.search(r"\blimit\b", statement, re.IGNORECASE) is not None
 
 
-def file_format(path: str, format: Optional[str] = None) -> str:
+def file_format(path: Union[str, BinaryIO], format: Optional[str] = None) -> str:
     """`format` when given, else the one the file extension says."""
     if format:
         if format not in FILE_FORMATS.values():
             raise GwenlakeException(f"unknown export format '{format}' (parquet, csv, json, jsonl)")
         return format
+    if not isinstance(path, (str, os.PathLike)):
+        raise GwenlakeException("writing to a stream: pass format= (parquet, csv, json, jsonl)")
     ext = os.path.splitext(path)[1].lower()
     if ext not in FILE_FORMATS:
         raise GwenlakeException(f"cannot tell the format of '{path}': use .parquet, .csv, .json or .jsonl, or pass format=")
@@ -83,13 +85,15 @@ def file_format(path: str, format: Optional[str] = None) -> str:
 
 
 class _FileWriter:
-    """Writes Arrow tables page after page into one file of `format`."""
+    """Writes Arrow tables page after page into one file of `format`, or into
+    an open binary stream (stdout, a pipe), which is flushed but left open."""
 
-    def __init__(self, path: str, format: str):
+    def __init__(self, path: Union[str, BinaryIO], format: str):
         self.path, self.format, self.rows = path, format, 0
         self._writer = None
         self._first = True
-        self._handle = open(path, "wb")
+        self._owned = isinstance(path, (str, os.PathLike))
+        self._handle = open(path, "wb") if self._owned else path
 
     def write(self, table) -> None:
         import pyarrow.csv as pacsv
@@ -120,7 +124,10 @@ class _FileWriter:
             self._handle.write(b"\n]\n" if self.rows else b"[]\n")
         if self._writer is not None:
             self._writer.close()
-        self._handle.close()
+        if self._owned:
+            self._handle.close()
+        else:
+            self._handle.flush()
 
 
 class Statements:
@@ -191,10 +198,11 @@ class Statements:
         """The whole result as a ``pandas.DataFrame``."""
         return self.read_all(statement, **kwargs).to_pandas()
 
-    def to_file(self, statement: str, path: str, *, format: Optional[str] = None, **kwargs: Any) -> int:
+    def to_file(self, statement: str, path: Union[str, BinaryIO], *, format: Optional[str] = None, **kwargs: Any) -> int:
         """Write the whole result to `path` as Parquet, CSV, JSON (one array) or
-        JSON Lines, the format taken from the extension unless given. Streams
-        page by page, so a result larger than memory is fine. Returns the rows written."""
+        JSON Lines, the format taken from the extension unless given. `path` may
+        be an open binary stream (`sys.stdout.buffer`), then `format` is required.
+        Streams page by page, so a result larger than memory is fine. Returns the rows written."""
         writer = _FileWriter(path, file_format(path, format))
         try:
             for table in self.iter_arrow(statement, **kwargs):
@@ -246,7 +254,7 @@ class AsyncStatements:
             offset += page_rows
         return pa.concat_tables(pages) if pages else pa.table({})
 
-    async def to_file(self, statement: str, path: str, *, format: Optional[str] = None, **kwargs: Any) -> int:
+    async def to_file(self, statement: str, path: Union[str, BinaryIO], *, format: Optional[str] = None, **kwargs: Any) -> int:
         writer = _FileWriter(path, file_format(path, format))
         try:
             writer.write(await self.read_all(statement, **kwargs))

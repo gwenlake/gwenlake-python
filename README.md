@@ -123,6 +123,7 @@ df = client.statements.to_dataframe("SELECT * FROM 'fleetsight.aisdk_vessels'")
 client.statements.to_file("SELECT * FROM 'fleetsight.aisdk_positions'", "positions.parquet")
 client.statements.to_file("SELECT mmsi, name FROM 'fleetsight.aisdk_vessels'", "vessels.csv")
 client.statements.to_file("SELECT * FROM 'fleetsight.aisdk_vessels'", "vessels.jsonl")   # or .json, one array
+client.statements.to_file("SELECT * FROM 'fleetsight.aisdk_vessels'", sys.stdout.buffer, format="parquet")   # a stream: format= required
 
 for page in client.statements.iter_arrow("SELECT * FROM 'fleetsight.aisdk_positions'", page_rows=100_000):
     ...   # pyarrow.Table, 100 000 rows at a time
@@ -188,6 +189,18 @@ gwenlake schedules create --project fleetsight --name "Nightly" --cron "0 6 * * 
 gwenlake repositories scan res.repository.… --wait
 gwenlake transforms set-parameters res.transform.… listen_seconds=600
 gwenlake files upload fleetsight.aisdk_positions_raw day.parquet --mode APPEND
+```
+
+`-o` is the short form of `--out`. `-o -` writes the result to stdout, so it can
+travel through a pipe or ssh; give `--format` then (there is no extension to
+read it from). Only the data goes to stdout, the row count goes to stderr:
+
+```sh
+gwenlake sql "SELECT * FROM 'fleetsight.aisdk_vessels'" -o - --format parquet > vessels.parquet
+gwenlake datasets export fleetsight.aisdk_positions -o - --format jsonl | jq .zone
+ssh server sh <<'EOF' > runs.parquet
+gwenlake sql "SELECT * FROM 'fleetsight.aisdk_ingestion_runs'" --profile fleetsight -o - --format parquet
+EOF
 ```
 
 Credentials: `--api-key`, `--profile NAME` (a section of `~/.gwenlake/credentials`),
