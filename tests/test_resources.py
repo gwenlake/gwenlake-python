@@ -254,7 +254,9 @@ def test_base_url_comes_from_the_profile_when_nothing_else_says(monkeypatch):
 
 @pytest.mark.parametrize("given, expected", [
     ("atlas.acme.example", "https://atlas.acme.example/v1"),              # a bare host: https and /v1
-    ("https://atlas.acme.example/", "https://atlas.acme.example/v1"),
+    ("https://atlas.acme.example/", "https://atlas.acme.example/"),        # a bare / keeps the root
+    ("http://localhost:8000/", "http://localhost:8000/"),                 # a catalog-service without gateway
+    ("localhost:8000/", "https://localhost:8000/"),
     ("https://atlas.gwenlake.com/api", "https://atlas.gwenlake.com/api/v1"),   # an Atlas host serves the API under /api/v1
     ("https://atlas.gwenlake.com/api/", "https://atlas.gwenlake.com/api/v1"),
     ("https://atlas.gwenlake.com/api/v1/", "https://atlas.gwenlake.com/api/v1"),
@@ -273,6 +275,20 @@ def test_candidate_endpoints_of_a_host():
 
     assert candidate_base_urls("atlas.acme.example") == ["https://atlas.acme.example/v1", "https://atlas.acme.example/api/v1"]
     assert candidate_base_urls("https://atlas.acme.example/api") == ["https://atlas.acme.example/api/v1", "https://atlas.acme.example/v1"]
+    assert candidate_base_urls("http://localhost:8000/") == ["http://localhost:8000/", "http://localhost:8000/v1", "http://localhost:8000/api/v1"]
+
+
+def test_an_endpoint_at_the_root_joins_resource_paths():
+    import httpx
+
+    seen = []
+    transport = httpx.MockTransport(lambda request: seen.append(str(request.url)) or httpx.Response(200, json={"object": "list", "data": []}))
+    from gwenlake import Gwenlake
+
+    client = Gwenlake(api_key="k", base_url="http://localhost:8000/")
+    client._client._client = httpx.Client(base_url=client._base_url, transport=transport)
+    client.datasets.list()
+    assert seen[0].startswith("http://localhost:8000/datasets")
 
 
 def test_an_html_answer_names_the_endpoint_problem(api, client):

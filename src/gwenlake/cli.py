@@ -236,7 +236,7 @@ def probe_endpoint(url: str, token: Optional[str]) -> Optional[str]:
     for candidate in candidate_base_urls(url):
         try:
             headers = {"Authorization": f"Bearer {token}"} if token else {}
-            response = httpx.get(f"{candidate}/users/me", headers=headers, timeout=10, follow_redirects=True)
+            response = httpx.get(f"{candidate.rstrip('/')}/users/me", headers=headers, timeout=10, follow_redirects=True)
         except httpx.HTTPError:
             continue
         if "json" in response.headers.get("content-type", "") and response.status_code in (200, 401, 403):

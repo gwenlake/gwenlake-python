@@ -335,9 +335,14 @@ def normalise_base_url(url: str) -> str:
     is missing: a bare host gets `/v1`, a host with `/api` gets `/api/v1`. Any
     other path is kept as given. `api.gwenlake.com` -> `https://api.gwenlake.com/v1`,
     `https://atlas.gwenlake.com/api` -> `https://atlas.gwenlake.com/api/v1`.
+    A URL ending with a bare `/` keeps the API at the root of its host, as a
+    catalog-service run locally without a gateway serves it:
+    `http://localhost:8000/` stays `http://localhost:8000/`.
     Whether a tenant's host serves the API under `/v1` or `/api/v1` is the
     deployment's choice: `gwenlake config set-profile` probes both."""
-    url = url.strip().rstrip("/")
+    url = url.strip()
+    at_root = url.endswith("/") and "/" not in url.partition("://")[2].rstrip("/")
+    url = url.rstrip("/")
     if url.lower() in KNOWN_ENDPOINTS:
         return KNOWN_ENDPOINTS[url.lower()]
     if "://" not in url:
@@ -345,7 +350,7 @@ def normalise_base_url(url: str) -> str:
     scheme, _, rest = url.partition("://")
     host, _, path = rest.partition("/")
     if not path:
-        return f"{scheme}://{host}/v1"
+        return f"{scheme}://{host}/" if at_root else f"{scheme}://{host}/v1"
     if path == "api":
         return f"{scheme}://{host}/api/v1"
     return url
