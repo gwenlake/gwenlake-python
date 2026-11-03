@@ -19,7 +19,7 @@ def time_trigger(cron: str, time_zone: str = "UTC") -> Dict[str, Any]:
 
 
 def build_action(*target_ids: str) -> Dict[str, Any]:
-    """The action that builds the given datasets (their stale upstream chain included)."""
+    """The action that builds the given datasets, each after every upstream dataset that has a transform."""
     return {"type": "build", "target_ids": list(target_ids)}
 
 

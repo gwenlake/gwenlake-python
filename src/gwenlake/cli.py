@@ -17,15 +17,28 @@ Listings print as a table, `--json` prints what the API answered.
 import configparser
 import json
 import os
+import re
 import sys
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import click
 import httpx
 
 from gwenlake import Gwenlake
+from gwenlake._resource import LIVE_STATES
 from gwenlake.credentials import Credentials
 from gwenlake.exceptions import GwenlakeException
+
+
+def _api_error(exc: httpx.HTTPStatusError) -> str:
+    detail = exc.response.text
+    try:
+        detail = exc.response.json().get("detail", detail)
+    except ValueError:
+        pass
+    return f"{exc.request.method} {exc.request.url.path}: {exc.response.status_code} {detail}"
 
 
 class _Group(click.Group):
@@ -35,12 +48,7 @@ class _Group(click.Group):
         try:
             return super().invoke(ctx)
         except httpx.HTTPStatusError as exc:
-            detail = exc.response.text
-            try:
-                detail = exc.response.json().get("detail", detail)
-            except ValueError:
-                pass
-            raise click.ClickException(f"{exc.request.method} {exc.request.url.path}: {exc.response.status_code} {detail}")
+            raise click.ClickException(_api_error(exc))
         except GwenlakeException as exc:
             raise click.ClickException(str(exc))
 
@@ -569,7 +577,301 @@ def sql(ctx, s: Session, statement, sql_file, out, fmt, limit, page_rows, mode):
 
 # -- builds ---------------------------------------------------------------------
 
-BUILD_COLUMNS = ("id", "status", "target_id", "triggered_by", "started_at", "finished_at", "error_message")
+BUILD_COLUMNS = ("id", "status", "target", "triggered_by", "started_at", "duration", "error_message")
+BUILD_STATES = ("PENDING", "RUNNING", "SUCCESS", "FAILED", "CANCELLED")
+BUILD_TRIGGERS = ("MANUAL", "SCHEDULE", "EVENT")
+PLAN_COLUMNS = ("step", "target", "after", "also_writes", "transform_id")
+BUILD_FAILED = ("FAILED", "CANCELLED")
+WAIT_INTERVAL = 5.0
+FOLLOW_INTERVAL = 2.0
+LOG_WINDOW = 5000
+FAILURE_TAIL = 20
+
+
+def _log_lines(answer: Any) -> List[str]:
+    text = answer.get("logs") if isinstance(answer, dict) else answer
+    if text is None:
+        return []
+    if isinstance(text, list):
+        return [str(line) for line in text]
+    return str(text).splitlines()
+
+
+def _overlap(previous: List[str], current: List[str]) -> int:
+    for size in range(min(len(previous), len(current)), 0, -1):
+        if previous[-size:] == current[:size]:
+            return size
+    return 0
+
+
+class _LogCursor:
+
+    def __init__(self, client: Gwenlake, build_id: str, tail: Optional[int] = None):
+        self.client, self.build_id, self.tail = client, build_id, tail
+        self.next: Optional[int] = None
+        self.window: Optional[List[str]] = None
+        self.detail: Optional[str] = None
+        self.printed = 0
+
+    def read(self) -> List[str]:
+        started = self.next is not None or self.window is not None
+        answer = self.client.builds.logs(self.build_id, tail=LOG_WINDOW if started else self.tail or LOG_WINDOW,
+                                         since=self.next)
+        lines = _log_lines(answer)
+        if isinstance(answer, dict):
+            self.detail = answer.get("detail") or self.detail
+        if isinstance(answer, dict) and "next" in answer:
+            self.next = answer["next"]
+            new = lines
+        else:
+            new = lines[_overlap(self.window, lines):] if self.window is not None else lines
+            self.window = lines
+        self.printed += len(new)
+        return new
+
+
+def _settle(s: Session, build_id: str, *, deadline: float, timeout: float, cursor: Optional[_LogCursor] = None,
+            to_stderr: bool = False, on_running: Optional[Callable[[], None]] = None) -> Dict[str, Any]:
+    status = None
+    while True:
+        build = s.client.builds.get(build_id)
+        previous, status = status, str(build.get("status", ""))
+        if status == "RUNNING" and previous != "RUNNING" and on_running is not None:
+            on_running()
+        if cursor is not None and status != "PENDING":
+            for line in cursor.read():
+                click.echo(line, err=to_stderr)
+        if status not in LIVE_STATES:
+            return build
+        if time.monotonic() >= deadline:
+            raise click.ClickException(f"build {build_id} still {status} after {timeout:.0f}s")
+        time.sleep(FOLLOW_INTERVAL if cursor is not None else WAIT_INTERVAL)
+
+
+def _moment(value: Any) -> Optional[datetime]:
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _elapsed(build: Dict[str, Any]) -> Optional[int]:
+    start = _moment(build.get("started_at"))
+    if start is None:
+        return None
+    if build.get("finished_at"):
+        end = _moment(build["finished_at"])
+    elif build.get("status") == "RUNNING":
+        end = datetime.now(timezone.utc)
+    else:
+        end = None
+    if end is None or end < start:
+        return None
+    return int((end - start).total_seconds())
+
+
+def _span(seconds: Optional[int]) -> str:
+    if seconds is None:
+        return ""
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
+
+
+def _took(build: Dict[str, Any]) -> str:
+    span = _span(_elapsed(build))
+    return f" ({span})" if span else ""
+
+
+def _since(value: str) -> datetime:
+    age = re.fullmatch(r"(\d+)([mhd])", value.strip())
+    if age:
+        unit = {"m": "minutes", "h": "hours", "d": "days"}[age.group(2)]
+        return datetime.now(timezone.utc) - timedelta(**{unit: int(age.group(1))})
+    try:
+        moment = datetime.fromisoformat(value.strip())
+    except ValueError:
+        raise click.BadParameter("a date (2026-11-01), a time (2026-11-01T08:00) or an age (90m, 6h, 3d)",
+                                 param_hint="'--since'")
+    return moment if moment.tzinfo else moment.astimezone()
+
+
+def _target_of(build: Dict[str, Any]) -> Optional[str]:
+    return build.get("target_id") or next(iter(build.get("outputs") or []), None)
+
+
+class _Names:
+
+    def __init__(self, s: Session):
+        self.s = s
+        self.names: Optional[Dict[str, str]] = None
+        self.projects: Dict[str, str] = {}
+
+    def __call__(self, resource_id: Optional[str]) -> str:
+        if not resource_id:
+            return ""
+        self._load()
+        return self.names.get(resource_id, resource_id)
+
+    def project_of(self, resource_id: Optional[str]) -> Optional[str]:
+        self._load()
+        return self.projects.get(resource_id or "")
+
+    def _load(self) -> None:
+        if self.names is not None:
+            return
+        self.names = {}
+        aliases = {p["id"]: p.get("alias") or p.get("slug") or p["id"] for p in self._rows(self.s.client.projects.list)}
+        for row in self._rows(self.s.client.datasets.list) + self._rows(self.s.client.ml_models.list):
+            alias = row.get("alias") or row.get("slug") or row["id"]
+            project_id = row.get("project_id")
+            self.names[row["id"]] = f"{aliases[project_id]}.{alias}" if project_id in aliases else alias
+            if project_id:
+                self.projects[row["id"]] = project_id
+
+    @staticmethod
+    def _rows(lister: Callable[[], Any]) -> List[Dict[str, Any]]:
+        try:
+            rows = lister()
+        except (httpx.HTTPError, GwenlakeException):
+            return []
+        return [row for row in rows if isinstance(row, dict) and row.get("id")] if isinstance(rows, list) else []
+
+
+def _build_rows(builds_: List[Dict[str, Any]], names: _Names) -> List[Dict[str, Any]]:
+    return [{**build, "target": names(_target_of(build)), "duration": _span(_elapsed(build))} for build in builds_]
+
+
+def _report_failure(s: Session, build: Dict[str, Any], *, with_logs: bool) -> None:
+    if build.get("error_message"):
+        click.echo(str(build["error_message"]).rstrip(), err=True)
+    if not with_logs:
+        return
+    try:
+        lines = _log_lines(s.client.builds.logs(build["id"], tail=FAILURE_TAIL))
+    except (httpx.HTTPError, GwenlakeException):
+        return
+    if lines:
+        click.echo(f"-- last {len(lines)} log lines of {build['id']} --", err=True)
+        for line in lines:
+            click.echo(line, err=True)
+
+
+def _watch(s: Session, batches: List[Tuple[str, List[Dict[str, Any]]]], *, timeout: float, follow: bool,
+           names: _Names, again: Optional[str] = None) -> List[Dict[str, Any]]:
+    deadline = time.monotonic() + timeout
+    for target, batch in batches:
+        labels = [names(_target_of(build)) or str(build.get("id")) for build in batch]
+        if len(batch) > 1 or len(batches) > 1:
+            heading = f"{len(batch)} build{'s' if len(batch) != 1 else ''}: " + " -> ".join(labels)
+            click.echo(f"{names(target)}: {heading}" if len(batches) > 1 else heading, err=True)
+        for index, (build, label) in enumerate(zip(batch, labels), 1):
+            step = f"[{index}/{len(batch)}] {label}"
+            cursor = _LogCursor(s.client, build["id"]) if follow else None
+            done = _settle(s, build["id"], deadline=deadline, timeout=timeout, cursor=cursor, to_stderr=True,
+                           on_running=lambda: click.echo(f"{step} RUNNING", err=True))
+            status = str(done.get("status", ""))
+            click.echo(f"{step} {status}{_took(done)}", err=True)
+            if status in BUILD_FAILED:
+                _report_failure(s, done, with_logs=not follow)
+                click.echo(f"to run it again: {again or 'gwenlake builds retry ' + batch[-1]['id']}", err=True)
+                break
+    return [s.client.builds.get(build["id"]) for _, batch in batches for build in batch]
+
+
+def _per_target(targets: Sequence[str], call: Callable[[str], Any], names: _Names) -> Tuple[List[Tuple[str, Any]], bool]:
+    answers: List[Tuple[str, Any]] = []
+    refused = False
+    for target in targets:
+        try:
+            answers.append((target, call(target)))
+        except httpx.HTTPStatusError as exc:
+            if len(targets) == 1:
+                raise
+            click.echo(f"{names(target)}: {_api_error(exc)}", err=True)
+            refused = True
+    return answers, refused
+
+
+def _route_missing(exc: httpx.HTTPStatusError) -> bool:
+    if exc.response.status_code == 405:
+        return True
+    if exc.response.status_code != 404:
+        return False
+    try:
+        return exc.response.json().get("detail") == "Not Found"
+    except ValueError:
+        return True
+
+
+def _plan(s: Session, target: str, *, target_only: bool, branch: Optional[str]) -> Dict[str, Any]:
+    try:
+        return s.client.builds.plan(target, target_only=target_only, branch=branch)
+    except httpx.HTTPStatusError as exc:
+        if _route_missing(exc):
+            raise click.ClickException("this API cannot plan a build (no POST /orchestration/builds/plan): "
+                                       "--dry-run needs a newer api-catalog. Nothing was built.")
+        raise
+
+
+def _show_plan(plan: Dict[str, Any], names: _Names) -> None:
+    steps = plan.get("steps") or []
+    numbers = {step["target_id"]: n for n, step in enumerate(steps, 1)}
+    rows = [{"step": n, "target": names(step["target_id"]),
+             "after": ", ".join(str(numbers.get(d) or names(d)) for d in step.get("depends_on") or []),
+             "also_writes": ", ".join(names(o) for o in step.get("outputs") or [] if o != step["target_id"]),
+             "transform_id": step.get("transform_id")}
+            for n, step in enumerate(steps, 1)]
+    count = f"{len(steps)} build{'s' if len(steps) != 1 else ''}"
+    click.echo(f"{names(plan.get('target_id'))} on branch {plan.get('branch')}: {count}, dry run, nothing started")
+    click.echo(table(rows, PLAN_COLUMNS))
+
+
+def _run(ctx: click.Context, s: Session, targets: Sequence[str], *, target_only: bool, branch: Optional[str],
+         wait: bool, follow: bool, dry_run: bool, timeout: float) -> None:
+    names = _Names(s)
+    if dry_run:
+        plans, refused = _per_target(targets, lambda t: _plan(s, t, target_only=target_only, branch=branch), names)
+        if ctx.obj.json:
+            emit(ctx, [plan for _, plan in plans] if len(targets) > 1 else plans[0][1])
+        for index, (_, plan) in enumerate([] if ctx.obj.json else plans):
+            if index:
+                click.echo()
+            _show_plan(plan, names)
+        if refused:
+            sys.exit(1)
+        return
+    batches, refused = _per_target(
+        targets, lambda t: s.client.builds.run(t, target_only=target_only, branch=branch)["builds"], names)
+    _finish(ctx, s, batches, names=names, wait=wait, follow=follow, timeout=timeout, refused=refused)
+
+
+def _finish(ctx: click.Context, s: Session, batches: List[Tuple[str, List[Dict[str, Any]]]], *, names: _Names,
+            wait: bool, follow: bool, timeout: float, refused: bool = False, again: Optional[str] = None) -> None:
+    watching = wait or follow
+    if watching:
+        builds_ = _watch(s, batches, timeout=timeout, follow=follow, names=names, again=again)
+    else:
+        builds_ = [build for _, batch in batches for build in batch]
+    emit(ctx, builds_ if ctx.obj.json else _build_rows(builds_, names), BUILD_COLUMNS)
+    if refused or (watching and any(str(build.get("status")) in BUILD_FAILED for build in builds_)):
+        sys.exit(1)
+
+
+def _dispatched(s: Session, task_id: str, *, timeout: float) -> Dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    while True:
+        task = s.client.builds.task(task_id)
+        if task.get("ready"):
+            if task.get("error"):
+                raise click.ClickException(f"task {task_id} failed: {task['error']}")
+            return task.get("result") or {}
+        if time.monotonic() >= deadline:
+            raise click.ClickException(f"task {task_id} still {task.get('status')} after {timeout:.0f}s")
+        time.sleep(FOLLOW_INTERVAL)
 
 
 @main.group()
@@ -578,36 +880,95 @@ def builds() -> None:
 
 
 @builds.command("run")
-@click.argument("dataset")
-@click.option("--target-only", is_flag=True, help="Build the target alone, not its stale upstream chain.")
+@click.argument("datasets", nargs=-1, required=True)
+@click.option("--target-only", is_flag=True, help="Build the target alone. By default, every upstream dataset that has a transform is built again first, stale or not.")
 @click.option("--branch", default=None, help="Iceberg data branch to build into.")
-@click.option("--wait", is_flag=True, help="Follow the build to its end.")
+@click.option("--wait", is_flag=True, help="Follow the builds to their end, step by step (on stderr).")
+@click.option("--follow", "-f", is_flag=True, help="As --wait, printing each build's log as it runs.")
+@click.option("--dry-run", is_flag=True, help="Show the builds it would run, in order, and start nothing.")
 @click.option("--timeout", default=3600, show_default=True, type=float)
 @pass_session
 @click.pass_context
-def builds_run(ctx, s: Session, dataset, target_only, branch, wait, timeout):
-    target = s.dataset_id(dataset)
-    batch = s.client.builds.run(target, target_only=target_only, branch=branch)
-    if wait:
-        s.client.builds.wait(batch["builds"][-1]["id"], timeout=timeout, raise_on_failure=False)
-        batch["builds"] = [s.client.builds.get(b["id"]) for b in batch["builds"]]
-    emit(ctx, batch["builds"], BUILD_COLUMNS)
-    failed = [b for b in batch["builds"] if str(b.get("status")) in ("FAILED", "CANCELLED")]
-    if wait and failed:
-        sys.exit(1)
+def builds_run(ctx, s: Session, datasets, target_only, branch, wait, follow, dry_run, timeout):
+    """Build one or more datasets, each with the chain of builds upstream of it."""
+    _run(ctx, s, [s.dataset_id(dataset) for dataset in datasets], target_only=target_only, branch=branch, wait=wait,
+         follow=follow, dry_run=dry_run, timeout=timeout)
+
+
+@builds.command("retry")
+@click.argument("build_id")
+@click.option("--target-only", is_flag=True, help="Build the target alone. By default, every upstream dataset that has a transform is built again first, stale or not.")
+@click.option("--branch", default=None, help="Iceberg data branch to build into (default: the build's own).")
+@click.option("--wait", is_flag=True, help="Follow the builds to their end, step by step (on stderr).")
+@click.option("--follow", "-f", is_flag=True, help="As --wait, printing each build's log as it runs.")
+@click.option("--dry-run", is_flag=True, help="Show the builds it would run, in order, and start nothing.")
+@click.option("--timeout", default=3600, show_default=True, type=float)
+@pass_session
+@click.pass_context
+def builds_retry(ctx, s: Session, build_id, target_only, branch, wait, follow, dry_run, timeout):
+    """Build the target of a finished build again, on the same data branch."""
+    build = s.client.builds.get(build_id)
+    status = str(build.get("status", ""))
+    if status in LIVE_STATES:
+        raise click.ClickException(f"build {build_id} is still {status}: wait for it, or cancel it first")
+    target = _target_of(build)
+    if not target:
+        raise click.ClickException(f"build {build_id} has no target to build again")
+    branch = branch or (build.get("context") or {}).get("branch")
+    _run(ctx, s, [target], target_only=target_only, branch=branch, wait=wait, follow=follow, dry_run=dry_run,
+         timeout=timeout)
+
+
+@builds.command("propagate")
+@click.argument("dataset")
+@click.option("--branch", default=None, help="Iceberg data branch to build into (default: main).")
+@click.option("--wait", is_flag=True, help="Follow the builds to their end, step by step (on stderr).")
+@click.option("--follow", "-f", is_flag=True, help="As --wait, printing each build's log as it runs.")
+@click.option("--timeout", default=3600, show_default=True, type=float)
+@pass_session
+@click.pass_context
+def builds_propagate(ctx, s: Session, dataset, branch, wait, follow, timeout):
+    """Build again, in order, every dataset downstream of DATASET (not DATASET itself)."""
+    root = s.dataset_id(dataset)
+    task = s.client.lineage.propagate(root, branch=branch)
+    result = _dispatched(s, task["task_id"], timeout=timeout)
+    if result.get("status") != "dispatched":
+        if ctx.obj.json:
+            emit(ctx, result)
+        else:
+            click.echo(result.get("detail") or f"nothing to build downstream of {dataset}", err=True)
+        return
+    batch = [s.client.builds.get(build_id) for build_id in result.get("build_ids") or []]
+    again = f"gwenlake builds propagate {dataset}" + (f" --branch {branch}" if branch else "")
+    _finish(ctx, s, [(root, batch)], names=_Names(s), wait=wait, follow=follow, timeout=timeout, again=again)
 
 
 @builds.command("list")
 @click.option("--target", default=None, help="Dataset ref or id.")
-@click.option("--status", default=None)
+@click.option("--project", default=None, help="Only the builds of this project's datasets and models.")
+@click.option("--status", default=None, type=click.Choice(BUILD_STATES, case_sensitive=False))
+@click.option("--trigger", default=None, type=click.Choice(BUILD_TRIGGERS, case_sensitive=False))
+@click.option("--since", default=None, help="Started since a date or time (2026-11-01, 2026-11-01T08:00), or an age (90m, 6h, 3d).")
 @click.option("--limit", default=20, show_default=True, type=int, help="Most recent builds to show.")
 @pass_session
 @click.pass_context
-def builds_list(ctx, s: Session, target, status, limit):
-    # The listing is cut client-side: the API's own `limit` answers nothing for small values (catalog bug, Oct 2026).
-    rows = s.client.builds.list(target_id=s.dataset_id(target) if target else None, status=status)
+def builds_list(ctx, s: Session, target, project, status, trigger, since, limit):
+    start = _since(since) if since else None
+    target_id = s.dataset_id(target) if target else None
+    server_limit = None if project or trigger or start or limit > 1000 else limit
+    rows = s.client.builds.list(target_id=target_id, status=status, limit=server_limit)
+    if server_limit and target_id is None and len(rows) < server_limit:
+        rows = s.client.builds.list(status=status)
+    names = _Names(s)
+    if project:
+        project_id = s.project_id(project)
+        rows = [b for b in rows if names.project_of(_target_of(b)) == project_id]
+    if trigger:
+        rows = [b for b in rows if str(b.get("triggered_by", "")).upper() == trigger]
+    if start:
+        rows = [b for b in rows if (moment := _moment(b.get("started_at"))) is not None and moment >= start]
     rows = sorted(rows, key=lambda b: b.get("started_at") or "", reverse=True)[:limit]
-    emit(ctx, rows, BUILD_COLUMNS)
+    emit(ctx, rows if ctx.obj.json else _build_rows(rows, names), BUILD_COLUMNS)
 
 
 @builds.command("get")
@@ -620,13 +981,27 @@ def builds_get(ctx, s: Session, build_id):
 
 @builds.command("logs")
 @click.argument("build_id")
-@click.option("--tail", default=None, type=int)
+@click.option("--tail", default=None, type=int, help="Last lines to show (the API's default: 200).")
+@click.option("--follow", "-f", is_flag=True, help="Keep printing the new lines until the build ends.")
+@click.option("--timeout", default=3600, show_default=True, type=float, help="How long --follow waits.")
 @pass_session
 @click.pass_context
-def builds_logs(ctx, s: Session, build_id, tail):
+def builds_logs(ctx, s: Session, build_id, tail, follow, timeout):
+    if follow:
+        cursor = _LogCursor(s.client, build_id, tail=tail)
+        build = _settle(s, build_id, deadline=time.monotonic() + timeout, timeout=timeout, cursor=cursor)
+        if not cursor.printed and cursor.detail:
+            click.echo(cursor.detail, err=True)
+        status = str(build.get("status", ""))
+        click.echo(f"{build_id} {status}{_took(build)}", err=True)
+        if status in BUILD_FAILED:
+            sys.exit(1)
+        return
     answer = s.client.builds.logs(build_id, tail=tail)
     if ctx.obj.json:
         emit(ctx, answer)
+    elif isinstance(answer, dict) and answer.get("logs") is None and answer.get("detail"):
+        click.echo(answer["detail"], err=True)
     else:
         click.echo(answer.get("logs") if isinstance(answer, dict) else answer)
 
@@ -645,10 +1020,30 @@ def builds_wait(ctx, s: Session, build_id, timeout):
 
 @builds.command("cancel")
 @click.argument("build_id")
+@click.option("--batch", "whole_batch", is_flag=True, help="Cancel every build of its batch still pending or running.")
 @pass_session
 @click.pass_context
-def builds_cancel(ctx, s: Session, build_id):
-    emit(ctx, s.client.builds.cancel(build_id))
+def builds_cancel(ctx, s: Session, build_id, whole_batch):
+    if not whole_batch:
+        emit(ctx, s.client.builds.cancel(build_id))
+        return
+    group = (s.client.builds.get(build_id).get("context") or {}).get("group_id")
+    if not group:
+        raise click.ClickException(f"build {build_id} belongs to no batch")
+    live = [build for state in ("PENDING", "RUNNING") for build in s.client.builds.list(status=state)
+            if (build.get("context") or {}).get("group_id") == group]
+    live.sort(key=lambda build: (build.get("context") or {}).get("plan_index") or 0, reverse=True)
+    cancelled = []
+    for build in live:
+        try:
+            cancelled.append(s.client.builds.cancel(build["id"]))
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 409:
+                raise
+    if not cancelled and not ctx.obj.json:
+        click.echo(f"nothing left to cancel in batch {group}", err=True)
+        return
+    emit(ctx, cancelled if ctx.obj.json else _build_rows(cancelled, _Names(s)), BUILD_COLUMNS)
 
 
 # -- schedules ------------------------------------------------------------------
@@ -1039,7 +1434,7 @@ def _accept_global_options(group: click.Group) -> None:
 _accept_global_options(main)
 
 
-def run() -> None:  # pragma: no cover - console entry point with a friendlier error
+def run() -> None:
     try:
         main(standalone_mode=True)
     except GwenlakeException as exc:

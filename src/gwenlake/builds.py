@@ -1,8 +1,9 @@
 """`/orchestration/builds` and `/orchestration/tasks` — running the workflow.
 
-A **build** materializes a dataset (or a model): `run` resolves the target's
-stale upstream chain into one build per node, chained in order, and answers
-the whole batch; `wait` follows a build to its end. A **task** is the other
+A **build** materializes a dataset (or a model): `run` resolves every
+upstream dataset that has a transform, stale or not, into one build per node,
+chained in order, and answers the whole batch; `plan` answers the same steps
+without starting anything; `wait` follows a build to its end. A **task** is the other
 asynchronous job the catalog runs, a repository scan for instance
 (`repositories.scan_lineage`): `task` reads its state, `wait_task` follows it.
 
@@ -26,6 +27,15 @@ def _check(job: Dict[str, Any], what: str, raise_on_failure: bool) -> Dict[str, 
     return job
 
 
+def _build_body(target_id: str, target_only: bool, branch: Optional[str], source_id: Optional[str]) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"target_id": target_id, "target_only": target_only}
+    if branch:
+        body["branch"] = branch
+    if source_id:
+        body["source_id"] = source_id
+    return body
+
+
 class Builds(Resource):
 
     def run(self, target_id: str, *, target_only: bool = False, branch: Optional[str] = None,
@@ -34,14 +44,14 @@ class Builds(Resource):
         batch: `group_id`, `target_id` and `builds` in topological order, the
         last one being the target's. `target_only` skips the upstream chain;
         `branch` writes every output on that Iceberg data branch."""
-        body: Dict[str, Any] = {"target_id": target_id, "target_only": target_only}
-        if branch:
-            body["branch"] = branch
-        if source_id:
-            body["source_id"] = source_id
+        body = _build_body(target_id, target_only, branch, source_id)
         if context:
             body["context"] = context
         return self._json("POST", "/orchestration/builds", json=body)
+
+    def plan(self, target_id: str, *, target_only: bool = False, branch: Optional[str] = None,
+             source_id: Optional[str] = None) -> Dict[str, Any]:
+        return self._json("POST", "/orchestration/builds/plan", json=_build_body(target_id, target_only, branch, source_id))
 
     def list(self, *, target_id: Optional[str] = None, status: Optional[str] = None,
              limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -50,9 +60,9 @@ class Builds(Resource):
     def get(self, build_id: str) -> Dict[str, Any]:
         return self._json("GET", f"/orchestration/builds/{build_id}")
 
-    def logs(self, build_id: str, *, tail: Optional[int] = None) -> Dict[str, Any]:
+    def logs(self, build_id: str, *, tail: Optional[int] = None, since: Optional[int] = None) -> Dict[str, Any]:
         """The build's log lines (`logs`, one string) with its status."""
-        return self._json("GET", f"/orchestration/builds/{build_id}/logs", params={"tail": tail})
+        return self._json("GET", f"/orchestration/builds/{build_id}/logs", params={"tail": tail, "since": since})
 
     def cancel(self, build_id: str) -> Dict[str, Any]:
         return self._json("POST", f"/orchestration/builds/{build_id}/cancel")
@@ -89,14 +99,14 @@ class AsyncBuilds(AsyncResource):
 
     async def run(self, target_id: str, *, target_only: bool = False, branch: Optional[str] = None,
                   source_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        body: Dict[str, Any] = {"target_id": target_id, "target_only": target_only}
-        if branch:
-            body["branch"] = branch
-        if source_id:
-            body["source_id"] = source_id
+        body = _build_body(target_id, target_only, branch, source_id)
         if context:
             body["context"] = context
         return await self._json("POST", "/orchestration/builds", json=body)
+
+    async def plan(self, target_id: str, *, target_only: bool = False, branch: Optional[str] = None,
+                   source_id: Optional[str] = None) -> Dict[str, Any]:
+        return await self._json("POST", "/orchestration/builds/plan", json=_build_body(target_id, target_only, branch, source_id))
 
     async def list(self, *, target_id: Optional[str] = None, status: Optional[str] = None,
                    limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -105,8 +115,8 @@ class AsyncBuilds(AsyncResource):
     async def get(self, build_id: str) -> Dict[str, Any]:
         return await self._json("GET", f"/orchestration/builds/{build_id}")
 
-    async def logs(self, build_id: str, *, tail: Optional[int] = None) -> Dict[str, Any]:
-        return await self._json("GET", f"/orchestration/builds/{build_id}/logs", params={"tail": tail})
+    async def logs(self, build_id: str, *, tail: Optional[int] = None, since: Optional[int] = None) -> Dict[str, Any]:
+        return await self._json("GET", f"/orchestration/builds/{build_id}/logs", params={"tail": tail, "since": since})
 
     async def cancel(self, build_id: str) -> Dict[str, Any]:
         return await self._json("POST", f"/orchestration/builds/{build_id}/cancel")

@@ -141,7 +141,7 @@ to. Datasets are referred to by id, or by `"<project>.<dataset>"` through
 | `client.datasets`, `client.files` | datasets (create, update, summary, branches, `delete_rows`, maintenance, search) and their files |
 | `client.statements`, `client.queries` | ad hoc SQL, stored SQL queries and their versions |
 | `client.transforms` | the producers of the lineage (`set_parameters`, `execute`, `functions`) |
-| `client.builds` | builds (`run`, `wait`, `run_and_wait`, `logs`, `cancel`) and asynchronous tasks |
+| `client.builds` | builds (`run`, `plan`, `wait`, `run_and_wait`, `logs`, `cancel`) and asynchronous tasks |
 | `client.schedules` | cron schedules (`time_trigger`, `build_action`, `trigger`, `enable`) |
 | `client.lineage` | the lineage graph, data branches of a lineage cone, workflow positions |
 | `client.repositories` | repositories, `scan_lineage`, and the git routes (tree, file, commit, branches) |
@@ -183,8 +183,14 @@ gwenlake datasets summary fleetsight.aisdk_positions
 gwenlake sql "SELECT zone, count(*) FROM 'fleetsight.aisstream_positions' GROUP BY 1"
 gwenlake sql "SELECT * FROM 'fleetsight.aisdk_vessels'" --out vessels.parquet       # or .csv, .json, .jsonl
 gwenlake datasets export fleetsight.aisdk_positions --out positions.csv --where "zone = 'brest'"
-gwenlake builds run fleetsight.aisstream_vessels --wait
-gwenlake builds logs build.58d2bddbad62
+gwenlake builds run fleetsight.aisstream_vessels --wait          # each step on stderr; --follow adds the logs
+gwenlake builds run fleetsight.aisstream_vessels --dry-run       # the builds it would run, in order; starts nothing
+gwenlake builds run fleetsight.vessels fleetsight.positions      # several targets, one batch each
+gwenlake builds list --project fleetsight --status failed --since 1d   # also --trigger schedule
+gwenlake builds logs build.58d2bddbad62 --follow                  # -f: new lines until the build ends
+gwenlake builds retry build.58d2bddbad62 --wait                   # its target again, on the same data branch
+gwenlake builds propagate fleetsight.aisdk_positions --wait       # everything downstream of it, not itself
+gwenlake builds cancel build.58d2bddbad62 --batch                 # every build of its batch still pending or running
 gwenlake schedules create --project fleetsight --name "Nightly" --cron "0 6 * * *" --time-zone Europe/Paris --target fleetsight.aisdk_quality_by_day
 gwenlake repositories scan res.repository.… --wait
 gwenlake transforms set-parameters res.transform.… listen_seconds=600
