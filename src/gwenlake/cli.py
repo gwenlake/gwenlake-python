@@ -585,6 +585,9 @@ BUILD_FAILED = ("FAILED", "CANCELLED")
 WAIT_INTERVAL = 5.0
 FOLLOW_INTERVAL = 2.0
 LOG_WINDOW = 5000
+WAIT_TIMEOUT = 3600.0
+TRANSIENT_STATUS = (502, 503, 504)
+TIMEOUT_HELP = "How long to wait, in seconds; 0 for no limit. Default: no limit with --follow, else 3600."
 FAILURE_TAIL = 20
 
 
@@ -630,21 +633,57 @@ class _LogCursor:
         return new
 
 
-def _settle(s: Session, build_id: str, *, deadline: float, timeout: float, cursor: Optional[_LogCursor] = None,
-            to_stderr: bool = False, on_running: Optional[Callable[[], None]] = None) -> Dict[str, Any]:
+def _wait_limit(timeout: Optional[float], follow: bool) -> Optional[float]:
+    if timeout is None:
+        return None if follow else WAIT_TIMEOUT
+    return timeout or None
+
+
+def _deadline(limit: Optional[float]) -> Optional[float]:
+    return None if limit is None else time.monotonic() + limit
+
+
+def _keeps_running(build_id: str) -> str:
+    return f"the build keeps running; to follow it again: gwenlake builds logs {build_id} --follow"
+
+
+def _is_transient(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in TRANSIENT_STATUS
+    return isinstance(exc, httpx.TransportError)
+
+
+def _settle(s: Session, build_id: str, *, deadline: Optional[float], timeout: Optional[float],
+            cursor: Optional[_LogCursor] = None, to_stderr: bool = False,
+            on_running: Optional[Callable[[], None]] = None) -> Dict[str, Any]:
     status = None
+    lost = False
     while True:
-        build = s.client.builds.get(build_id)
-        previous, status = status, str(build.get("status", ""))
-        if status == "RUNNING" and previous != "RUNNING" and on_running is not None:
-            on_running()
-        if cursor is not None and status != "PENDING":
-            for line in cursor.read():
+        try:
+            build = s.client.builds.get(build_id)
+            current = str(build.get("status", ""))
+            lines = cursor.read() if cursor is not None and current != "PENDING" else []
+        except (httpx.HTTPStatusError, httpx.TransportError) as exc:
+            if not _is_transient(exc):
+                raise
+            if not lost:
+                click.echo(f"{build_id}: connection to the API lost ({type(exc).__name__}), retrying", err=True)
+                lost = True
+        else:
+            if lost:
+                click.echo(f"{build_id}: connection to the API back", err=True)
+                lost = False
+            previous, status = status, current
+            if status == "RUNNING" and previous != "RUNNING" and on_running is not None:
+                on_running()
+            for line in lines:
                 click.echo(line, err=to_stderr)
-        if status not in LIVE_STATES:
-            return build
-        if time.monotonic() >= deadline:
-            raise click.ClickException(f"build {build_id} still {status} after {timeout:.0f}s")
+            if status not in LIVE_STATES:
+                return build
+        if deadline is not None and time.monotonic() >= deadline:
+            raise click.ClickException(
+                f"build {build_id} still {status or 'unknown'} after {timeout:.0f}s; {_keeps_running(build_id)}"
+            )
         time.sleep(FOLLOW_INTERVAL if cursor is not None else WAIT_INTERVAL)
 
 
@@ -760,9 +799,9 @@ def _report_failure(s: Session, build: Dict[str, Any], *, with_logs: bool) -> No
             click.echo(line, err=True)
 
 
-def _watch(s: Session, batches: List[Tuple[str, List[Dict[str, Any]]]], *, timeout: float, follow: bool,
+def _watch(s: Session, batches: List[Tuple[str, List[Dict[str, Any]]]], *, timeout: Optional[float], follow: bool,
            names: _Names, again: Optional[str] = None) -> List[Dict[str, Any]]:
-    deadline = time.monotonic() + timeout
+    deadline = _deadline(timeout)
     for target, batch in batches:
         labels = [names(_target_of(build)) or str(build.get("id")) for build in batch]
         if len(batch) > 1 or len(batches) > 1:
@@ -770,9 +809,14 @@ def _watch(s: Session, batches: List[Tuple[str, List[Dict[str, Any]]]], *, timeo
             click.echo(f"{names(target)}: {heading}" if len(batches) > 1 else heading, err=True)
         for index, (build, label) in enumerate(zip(batch, labels), 1):
             step = f"[{index}/{len(batch)}] {label}"
+            click.echo(f"{step} {build['id']}", err=True)
             cursor = _LogCursor(s.client, build["id"]) if follow else None
-            done = _settle(s, build["id"], deadline=deadline, timeout=timeout, cursor=cursor, to_stderr=True,
-                           on_running=lambda: click.echo(f"{step} RUNNING", err=True))
+            try:
+                done = _settle(s, build["id"], deadline=deadline, timeout=timeout, cursor=cursor, to_stderr=True,
+                               on_running=lambda: click.echo(f"{step} RUNNING", err=True))
+            except KeyboardInterrupt:
+                click.echo(f"\nstopped following; {_keeps_running(build['id'])}", err=True)
+                sys.exit(130)
             status = str(done.get("status", ""))
             click.echo(f"{step} {status}{_took(done)}", err=True)
             if status in BUILD_FAILED:
@@ -831,7 +875,7 @@ def _show_plan(plan: Dict[str, Any], names: _Names) -> None:
 
 
 def _run(ctx: click.Context, s: Session, targets: Sequence[str], *, target_only: bool, branch: Optional[str],
-         wait: bool, follow: bool, dry_run: bool, timeout: float) -> None:
+         wait: bool, follow: bool, dry_run: bool, timeout: Optional[float]) -> None:
     names = _Names(s)
     if dry_run:
         plans, refused = _per_target(targets, lambda t: _plan(s, t, target_only=target_only, branch=branch), names)
@@ -850,10 +894,11 @@ def _run(ctx: click.Context, s: Session, targets: Sequence[str], *, target_only:
 
 
 def _finish(ctx: click.Context, s: Session, batches: List[Tuple[str, List[Dict[str, Any]]]], *, names: _Names,
-            wait: bool, follow: bool, timeout: float, refused: bool = False, again: Optional[str] = None) -> None:
+            wait: bool, follow: bool, timeout: Optional[float], refused: bool = False,
+            again: Optional[str] = None) -> None:
     watching = wait or follow
     if watching:
-        builds_ = _watch(s, batches, timeout=timeout, follow=follow, names=names, again=again)
+        builds_ = _watch(s, batches, timeout=_wait_limit(timeout, follow), follow=follow, names=names, again=again)
     else:
         builds_ = [build for _, batch in batches for build in batch]
     emit(ctx, builds_ if ctx.obj.json else _build_rows(builds_, names), BUILD_COLUMNS)
@@ -886,7 +931,7 @@ def builds() -> None:
 @click.option("--wait", is_flag=True, help="Follow the builds to their end, step by step (on stderr).")
 @click.option("--follow", "-f", is_flag=True, help="As --wait, printing each build's log as it runs.")
 @click.option("--dry-run", is_flag=True, help="Show the builds it would run, in order, and start nothing.")
-@click.option("--timeout", default=3600, show_default=True, type=float)
+@click.option("--timeout", default=None, type=float, help=TIMEOUT_HELP)
 @pass_session
 @click.pass_context
 def builds_run(ctx, s: Session, datasets, target_only, branch, wait, follow, dry_run, timeout):
@@ -902,7 +947,7 @@ def builds_run(ctx, s: Session, datasets, target_only, branch, wait, follow, dry
 @click.option("--wait", is_flag=True, help="Follow the builds to their end, step by step (on stderr).")
 @click.option("--follow", "-f", is_flag=True, help="As --wait, printing each build's log as it runs.")
 @click.option("--dry-run", is_flag=True, help="Show the builds it would run, in order, and start nothing.")
-@click.option("--timeout", default=3600, show_default=True, type=float)
+@click.option("--timeout", default=None, type=float, help=TIMEOUT_HELP)
 @pass_session
 @click.pass_context
 def builds_retry(ctx, s: Session, build_id, target_only, branch, wait, follow, dry_run, timeout):
@@ -924,14 +969,14 @@ def builds_retry(ctx, s: Session, build_id, target_only, branch, wait, follow, d
 @click.option("--branch", default=None, help="Iceberg data branch to build into (default: main).")
 @click.option("--wait", is_flag=True, help="Follow the builds to their end, step by step (on stderr).")
 @click.option("--follow", "-f", is_flag=True, help="As --wait, printing each build's log as it runs.")
-@click.option("--timeout", default=3600, show_default=True, type=float)
+@click.option("--timeout", default=None, type=float, help=TIMEOUT_HELP)
 @pass_session
 @click.pass_context
 def builds_propagate(ctx, s: Session, dataset, branch, wait, follow, timeout):
     """Build again, in order, every dataset downstream of DATASET (not DATASET itself)."""
     root = s.dataset_id(dataset)
     task = s.client.lineage.propagate(root, branch=branch)
-    result = _dispatched(s, task["task_id"], timeout=timeout)
+    result = _dispatched(s, task["task_id"], timeout=timeout or WAIT_TIMEOUT)
     if result.get("status") != "dispatched":
         if ctx.obj.json:
             emit(ctx, result)
@@ -983,13 +1028,18 @@ def builds_get(ctx, s: Session, build_id):
 @click.argument("build_id")
 @click.option("--tail", default=None, type=int, help="Last lines to show (the API's default: 200).")
 @click.option("--follow", "-f", is_flag=True, help="Keep printing the new lines until the build ends.")
-@click.option("--timeout", default=3600, show_default=True, type=float, help="How long --follow waits.")
+@click.option("--timeout", default=None, type=float, help="How long --follow waits, in seconds; 0 or none for no limit.")
 @pass_session
 @click.pass_context
 def builds_logs(ctx, s: Session, build_id, tail, follow, timeout):
     if follow:
         cursor = _LogCursor(s.client, build_id, tail=tail)
-        build = _settle(s, build_id, deadline=time.monotonic() + timeout, timeout=timeout, cursor=cursor)
+        limit = _wait_limit(timeout, True)
+        try:
+            build = _settle(s, build_id, deadline=_deadline(limit), timeout=limit, cursor=cursor)
+        except KeyboardInterrupt:
+            click.echo(f"\nstopped following; {_keeps_running(build_id)}", err=True)
+            sys.exit(130)
         if not cursor.printed and cursor.detail:
             click.echo(cursor.detail, err=True)
         status = str(build.get("status", ""))
