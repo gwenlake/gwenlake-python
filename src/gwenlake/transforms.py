@@ -52,6 +52,21 @@ the connection's credentials never reach the code::
             with fs_in.open(f["path"], "rb") as src, fs_out.open(f["path"], "wb") as dst:
                 shutil.copyfileobj(src, dst)
 
+An ``Output`` may also name a **mediaset** — the files a step produces
+(rasters, images, chips), which are not rows. The decorated function then
+receives a :class:`TransformMediasetOutput` whose ``.filesystem()`` writes
+the files through the mediasets API (the media type is checked on upload),
+and the workflow draws the transform as the mediaset's producer::
+
+    @transform(
+        scenes=Input("geo.scenes"),
+        images=Output("geo.scene-images"),     # a mediaset
+    )
+    def render(scenes, images):
+        fs = images.filesystem()
+        for row in scenes.dataframe().itertuples():
+            fs.write(f"{row.day}/{row.scene_id}.png", render_png(row))
+
 ``@incremental`` (stacked above ``@transform`` or ``@transform_df``) is for a
 transform that keeps its own memory in an
 Output — the log of what it has already processed — and reads it back on the
@@ -210,6 +225,59 @@ def _resolve_dataset_id(client: Any, ref: str) -> str:
     # No dot: try as a dataset alias across all datasets, else assume it's an id.
     match = next((d for d in client.datasets.list() if d.get("alias") == ref), None)
     return match["id"] if match else ref
+
+
+def _resolve_mediaset_id(client: Any, ref: str) -> Optional[str]:
+    """The id of the mediaset ``"<project_alias>.<mediaset_alias>"`` (or of a
+    ``res.mediaset.*`` id as is), ``None`` when there is none."""
+    if ref.startswith("res.mediaset."):
+        return ref
+    if "." not in ref:
+        return None
+    project_alias, alias = ref.split(".", 1)
+    project = next((p for p in client.projects.list() if p.get("alias") == project_alias), None)
+    if project is None:
+        return None
+    wanted = alias.replace("-", "_")
+    mediasets = getattr(client, "mediasets", None)
+    if mediasets is None:
+        return None
+    for m in mediasets.list(project_id=project["id"]) or []:
+        if (m.get("alias") or m.get("slug") or "").replace("-", "_") == wanted:
+            return m["id"]
+    return None
+
+
+def _output_kind(client: Any, ref: str) -> Tuple[str, Optional[str]]:
+    """What an ``Output`` names: ``("dataset", id)`` or ``("mediaset", id)``.
+
+    An id says it itself. A ``project.alias`` ref is a dataset when the
+    project has a dataset of that alias, else a mediaset when it has one;
+    neither gives ``("dataset", None)``, and the dataset handle reports the
+    missing dataset when it is first used, as it always has."""
+    if ref.startswith("res.mediaset."):
+        return "mediaset", ref
+    if ref.startswith("res.dataset."):
+        return "dataset", ref
+    if "." not in ref:
+        return "dataset", None
+    try:
+        return "dataset", _resolve_dataset_id(client, ref)
+    except GwenlakeException:
+        pass
+    mediaset = _resolve_mediaset_id(client, ref)
+    return ("mediaset", mediaset) if mediaset else ("dataset", None)
+
+
+def _output_id(client: Any, ref: str) -> Optional[str]:
+    """The id an ``Output`` names, dataset or mediaset; ``None`` when neither exists."""
+    resolved = _output_kind(client, ref)[1]
+    if resolved is None:
+        try:
+            resolved = _resolve_dataset_id(client, ref)
+        except GwenlakeException:
+            return None
+    return resolved
 
 
 def _catalog_connections() -> Dict[str, str]:
@@ -935,6 +1003,115 @@ class TransformOutput:
         return FileSystem(self._client, self.dataset_id)
 
 
+class MediasetFileSystem:
+    """File access to a mediaset through the mediasets API: the same surface
+    as :class:`FileSystem` (``ls`` / ``read`` / ``write`` / ``open`` /
+    ``delete``). A mediaset has no data branches: one store, on the trunk.
+    Every upload is checked against the mediaset's media type (a ``.xml`` in
+    an ``image`` mediaset is refused with a 415)."""
+
+    def __init__(self, client: Any, mediaset_id: str):
+        self._client = client
+        self._mediaset_id = mediaset_id
+
+    def _list(self, path: Optional[str]) -> List[Dict[str, Any]]:
+        return self._client.mediasets.list_files(self._mediaset_id, path=path) or []
+
+    def ls(self, path: Optional[str] = None, *, glob: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The entries of one directory, or with ``glob`` the files matching
+        it, each with its ``path`` relative to the mediaset's root."""
+        entries = [{**e, "path": _mediaset_entry_path(path, e), "is_dir": (e.get("filename") or "").endswith("/")}
+                   for e in self._list(path)]
+        if glob is None:
+            return entries
+        selector, recursive = _glob_regex(glob), "**" in glob
+        return list(self._walk(entries, selector, recursive))
+
+    def _walk(self, entries, selector, recursive):
+        for entry in entries:
+            if entry.get("is_dir"):
+                if recursive:
+                    sub = entry["path"].rstrip("/")
+                    yield from self._walk(
+                        [{**e, "path": _mediaset_entry_path(sub, e), "is_dir": (e.get("filename") or "").endswith("/")}
+                         for e in self._list(sub)],
+                        selector, recursive)
+                continue
+            if selector.search(entry["path"]):
+                yield entry
+
+    files = ls
+
+    def read(self, filepath: str) -> bytes:
+        return self._client.mediasets.download(self._mediaset_id, filepath)
+
+    def write(self, filepath: str, data: bytes, **_: Any) -> Any:
+        """Upload ``data`` at ``filepath`` (``dir/sub/name.ext``), replacing
+        a file already there."""
+        path, filename = _split_path(filepath)
+        return self._client.mediasets.upload(self._mediaset_id, bytes(data), path=path, filename=filename)
+
+    def delete(self, filepath: str) -> bool:
+        return self._client.mediasets.delete_file(self._mediaset_id, filepath)
+
+    def open(self, filepath: str, mode: str = "r"):
+        if "w" in mode or "a" in mode:
+            return _WriteBuffer(self, filepath)
+        return io.BytesIO(self.read(filepath))
+
+
+def _mediaset_entry_path(directory: Optional[str], entry: Dict[str, Any]) -> str:
+    """An entry's path from the mediaset's root (the API's ``path`` is the
+    storage prefix). A directory is listed with a trailing ``/``."""
+    name = (entry.get("filename") or "").rstrip("/")
+    return f"{directory.rstrip('/')}/{name}" if directory else name
+
+
+class TransformMediasetOutput:
+    """An ``Output`` that names a mediaset: the files the transform writes.
+
+    ``.filesystem()`` writes them (and lists, reads, deletes). There are no
+    rows: ``write_dataframe`` is refused, and under ``@incremental`` a
+    mediaset keeps no log — the transform's memory belongs in a dataset
+    output beside it."""
+
+    kind = "mediaset"
+
+    def __init__(self, client: Any, ref: str, mediaset_id: Optional[str] = None):
+        self._client = client
+        self.ref = ref
+        self._mediaset_id = mediaset_id
+
+    @property
+    def mediaset_id(self) -> str:
+        if self._mediaset_id is None:
+            self._mediaset_id = _resolve_mediaset_id(self._client, self.ref)
+            if self._mediaset_id is None:
+                raise GwenlakeException(f"No mediaset '{self.ref}' in the catalog")
+        return self._mediaset_id
+
+    def filesystem(self, mode: str = "current") -> MediasetFileSystem:
+        if mode != "current":
+            raise GwenlakeException(
+                f"{self.ref}: a mediaset keeps no previous state to read (mode {mode!r}); "
+                "keep the transform's memory in a dataset output"
+            )
+        return MediasetFileSystem(self._client, self.mediaset_id)
+
+    def write(self, filepath: str, data: bytes) -> Any:
+        return self.filesystem().write(filepath, data)
+
+    def write_dataframe(self, *args: Any, **kwargs: Any) -> None:
+        raise GwenlakeException(
+            f"{self.ref} is a mediaset: it holds files, not rows — write them with .filesystem().write(path, bytes)"
+        )
+
+    write_dataframes = write_dataframe
+
+    def finish(self) -> None:
+        """Nothing to close: every file was uploaded when written."""
+
+
 # ---------------------------------------------------------------------------
 # Incremental transforms (``@incremental``)
 # ---------------------------------------------------------------------------
@@ -1382,15 +1559,23 @@ def _output_handles(
     """One handle per Output, shared between the body's parameters and the
     decorator's own writes — so a ``set_mode`` in the body is what the
     returned DataFrame is written with."""
-    if incremental is None:
-        return {name: TransformOutput(client, spec.ref) for name, spec in outputs.items()}
-    run_id = _run_id()
-    return {
-        name: IncrementalTransformOutput(
-            client, spec.ref, semantic_version=incremental["semantic_version"], run_id=run_id,
-        )
-        for name, spec in outputs.items()
-    }
+    run_id = _run_id() if incremental is not None else None
+    handles: Dict[str, Any] = {}
+    for name, spec in outputs.items():
+        kind, resolved = _output_kind(client, spec.ref)
+        if kind == "mediaset":
+            handles[name] = TransformMediasetOutput(client, spec.ref, resolved)
+            continue
+        if incremental is None:
+            handle = TransformOutput(client, spec.ref)
+        else:
+            handle = IncrementalTransformOutput(
+                client, spec.ref, semantic_version=incremental["semantic_version"], run_id=run_id,
+            )
+        if resolved:
+            handle._dataset_id = resolved
+        handles[name] = handle
+    return handles
 
 
 def _finish_outputs(handles: Dict[str, TransformOutput]) -> None:
@@ -2034,13 +2219,18 @@ def incremental(
 # ---------------------------------------------------------------------------
 
 def _target_dataset_id() -> Optional[str]:
-    """The output dataset this build targets, read out of the storage URL the
-    engine exports as ``CATALOG_OUTPUT`` (``.../res.dataset.<uuid>/files/``)."""
+    """The output this build targets — a dataset, or a mediaset a python
+    transform writes: ``CATALOG_OUTPUT_ID`` when the engine exports it, else
+    read out of the storage URL it exports as ``CATALOG_OUTPUT``
+    (``.../res.dataset.<uuid>/files/``)."""
+    explicit = (os.environ.get("CATALOG_OUTPUT_ID") or "").strip()
+    if explicit:
+        return explicit
     out = os.environ.get("CATALOG_OUTPUT") or os.environ.get("CATALOG_OUTPUT_S3") or ""
     # `.../datasets/res.dataset.<id>/files/` — take the whole path segment rather
     # than assume the id's shape, so an unrecognised id can't quietly degrade
     # into "no target" (which would run every transform in the module).
-    match = re.search(r"res\.dataset\.[^/]+", out)
+    match = re.search(r"res\.(?:dataset|mediaset)\.[^/]+", out)
     return match.group(0) if match else None
 
 
@@ -2072,7 +2262,8 @@ def _selected_transforms(client: Any, transforms: Tuple[Callable, ...]) -> List[
     for fn in transforms:
         outputs = getattr(fn, "outputs", {}) or {}
         for spec in outputs.values():
-            if _resolve_dataset_id(client, spec.ref) == target:
+            # The build's target may be a mediaset the transform writes.
+            if _output_id(client, spec.ref) == target:
                 selected.append(fn)
                 break
     if not selected:
