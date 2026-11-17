@@ -35,14 +35,14 @@ def _options(method: str, url: str, *, params=None, json=None, headers=None, tim
 
 def _decode(response) -> Any:
     """The JSON of an answer; a page of HTML means the URL is not an API
-    endpoint (an Atlas host serves it under /api/v1, an API host under /v1)."""
+    endpoint (an Atlas host serves it under /api/v1, a gateway under /v1)."""
     if not response.content:
         return None
     content_type = response.headers.get("content-type", "")
     if "json" not in content_type:
         raise GwenlakeException(
             f"{response.request.method} {response.request.url} answered {content_type or 'no content type'} "
-            f"instead of JSON: not an API endpoint. An Atlas host serves the API under /api/v1, an API host "
+            f"instead of JSON: not an API endpoint. An Atlas host serves the API under /api/v1, a gateway "
             f"under /v1 (see `gwenlake config set-profile --base-url`)."
         )
     return response.json()

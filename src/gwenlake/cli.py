@@ -6,9 +6,10 @@ from a terminal, in the noun-verb form of the SDK resources.
 Credentials come, in order, from `--api-key`, `--profile` (a section of
 `~/.gwenlake/credentials`), `GWENLAKE_API_KEY` (a `.env` of the current
 directory is read first), then the `default` profile. The API endpoint is
-`--base-url`, else `GWENLAKE_BASE_URL`, else the profile's `base_url`, else
-`https://api.gwenlake.com/v1`: that is how a tenant deployed on its own host
-is reached (`gwenlake config set-profile client --token ... --base-url ...`).
+`--base-url`, else `GWENLAKE_BASE_URL`, else the profile's `base_url` or
+`host`, else `https://atlas.gwenlake.com/api/v1`. A tenant is reached by its
+name (`acme` is `https://acme.gwenlakeatlas.com/api/v1`) or by its URL
+(`gwenlake config set-profile client --token ... --base-url ...`).
 
 Datasets are named `<project>.<dataset>` (or by id); projects by slug or id.
 Listings print as a table, `--json` prints what the API answered.
@@ -168,7 +169,7 @@ def _resource_body(name: Optional[str], description: Optional[str], fields: Sequ
 @click.group(cls=_Group, context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--profile", "-p", default=None, envvar="GWENLAKE_PROFILE", help="Section of ~/.gwenlake/credentials to use.")
 @click.option("--api-key", default=None, help="API key (else GWENLAKE_API_KEY, .env, or the profile).")
-@click.option("--base-url", default=None, help="API endpoint: 'api' (api.gwenlake.com/v1, the default), 'atlas' (atlas.gwenlake.com/api/v1), or a tenant's host or URL (else GWENLAKE_BASE_URL or the profile's base_url). See `gwenlake config endpoints`.")
+@click.option("--base-url", default=None, help="API endpoint: 'atlas' (atlas.gwenlake.com/api/v1, the default), a tenant's name (acme: acme.gwenlakeatlas.com/api/v1), or a host or URL (else GWENLAKE_BASE_URL or the profile's base_url / host). See `gwenlake config endpoints`.")
 @click.option("--json", "json_output", is_flag=True, help="Print the API's JSON instead of a table.")
 @click.version_option(package_name="gwenlake", prog_name="gwenlake")
 @click.pass_context
@@ -204,17 +205,18 @@ def config_path() -> None:
 def config_endpoints(ctx: click.Context, s: Session) -> None:
     """The known API endpoints, their short names, and the one this command would use."""
     from gwenlake.client import _resolve_base_url
-    from gwenlake.constants import KNOWN_ENDPOINTS
+    from gwenlake.constants import GWENLAKE_TENANT_URL, KNOWN_ENDPOINTS
 
-    rows = [{"name": name, "url": url, "serves": "the Gwenlake APIs and Atlas under /v1" if name == "api"
-             else "the same API as the Atlas application serves it, under /api/v1"} for name, url in KNOWN_ENDPOINTS.items()]
+    rows = [{"name": name, "url": url, "serves": "the Gwenlake APIs and Atlas, under /api/v1" if name == "atlas"
+             else "the same endpoint (its former name)"} for name, url in KNOWN_ENDPOINTS.items()]
+    rows.append({"name": "<tenant>", "url": GWENLAKE_TENANT_URL.format(tenant="<tenant>"), "serves": "a tenant, by its name"})
     credentials = Credentials.from_profile(s.profile) if s.profile else None
     current = _resolve_base_url(s.base_url, credentials)
     if ctx.obj.json:
         emit(ctx, {"known": KNOWN_ENDPOINTS, "current": current})
     else:
         click.echo(table(rows, ("name", "url", "serves")))
-        click.echo(f"\ncurrent: {current}  (from --base-url, GWENLAKE_BASE_URL, the profile's base_url, then the default)")
+        click.echo(f"\ncurrent: {current}  (from --base-url, GWENLAKE_BASE_URL, the profile's base_url or host, then the default)")
         click.echo("a tenant on its own host: --base-url atlas.acme.example (its API prefix, /v1 or /api/v1, is probed by `config set-profile`)")
 
 
@@ -231,7 +233,8 @@ def config_list(ctx: click.Context, s: Session) -> None:
         token = info.get("token") or ""
         rows.append({"profile": section, "auth": "token" if token else ("oauth" if info.get("client_id") else "none"),
                      "token": (token[:6] + "..." + token[-4:]) if len(token) > 12 else ("***" if token else ""),
-                     "base_url": info.get("base_url") or "", "hostname": info.get("hostname") or ""})
+                     "base_url": info.get("base_url") or info.get("endpoint") or info.get("host") or "",
+                     "hostname": info.get("hostname") or ""})
     emit(ctx, rows, ("profile", "auth", "token", "base_url", "hostname"))
 
 
@@ -255,11 +258,11 @@ def probe_endpoint(url: str, token: Optional[str]) -> Optional[str]:
 @config.command("set-profile")
 @click.argument("name")
 @click.option("--token", default=None, help="API key of the profile.")
-@click.option("--base-url", default=None, help="API endpoint of the profile: a host (atlas.acme.example), or a URL.")
+@click.option("--base-url", default=None, help="API endpoint of the profile: a tenant's name (acme), a host (atlas.acme.example), or a URL.")
 @click.option("--probe/--no-probe", default=True, show_default=True, help="Check which path the host serves the API at.")
 @click.option("--client-id", default=None)
 @click.option("--client-secret", default=None)
-@click.option("--hostname", default=None, help="OAuth host for client credentials.")
+@click.option("--hostname", default=None, help="The tenant's name (acme: acme.gwenlakeatlas.com/api/v1); with client credentials, a URL is the OAuth server.")
 @click.option("--scopes", default=None, help="Comma-separated OAuth scopes.")
 def config_set_profile(name: str, token: Optional[str], base_url: Optional[str], probe: bool, client_id: Optional[str],
                        client_secret: Optional[str], hostname: Optional[str], scopes: Optional[str]) -> None:

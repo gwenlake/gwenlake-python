@@ -249,7 +249,7 @@ def test_base_url_comes_from_the_profile_when_nothing_else_says(monkeypatch):
     assert _resolve_base_url(None, tenant) == "https://env/v1"
     assert _resolve_base_url(None, Credentials(token="t")) == "https://env/v1"
     monkeypatch.delenv("GWENLAKE_BASE_URL")
-    assert _resolve_base_url(None, Credentials(token="t")) == "https://api.gwenlake.com/v1"
+    assert _resolve_base_url(None, Credentials(token="t")) == "https://atlas.gwenlake.com/api/v1"
 
 
 @pytest.mark.parametrize("given, expected", [
@@ -261,7 +261,10 @@ def test_base_url_comes_from_the_profile_when_nothing_else_says(monkeypatch):
     ("https://atlas.gwenlake.com/api/", "https://atlas.gwenlake.com/api/v1"),
     ("https://atlas.gwenlake.com/api/v1/", "https://atlas.gwenlake.com/api/v1"),
     ("http://localhost:8000/v1", "http://localhost:8000/v1"),
-    ("api", "https://api.gwenlake.com/v1"),                               # the short names
+    ("api", "https://atlas.gwenlake.com/api/v1"),                         # the short names: one endpoint
+    ("acme", "https://acme.gwenlakeatlas.com/api/v1"),                    # any other bare name is a tenant
+    ("Acme-Prod", "https://acme-prod.gwenlakeatlas.com/api/v1"),
+    ("localhost", "https://localhost/v1"),                                # but not this one
     ("atlas", "https://atlas.gwenlake.com/api/v1"),
 ])
 def test_an_endpoint_is_normalised(given, expected):

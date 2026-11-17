@@ -6,6 +6,7 @@ import httpx
 from typing import Any, List, Optional, Dict
 from dataclasses import dataclass, field
 
+from gwenlake.constants import TENANT_NAME
 from gwenlake.flow import ClientOAuthFlowProvider
 from gwenlake.token import OAuthToken, OAuthTokenResponse
 
@@ -153,10 +154,12 @@ class Credentials:
 
         Each section is a named profile and may hold either a static ``token``
         (API key) or OAuth2 ``client_id``/``client_secret`` settings, plus an
-        optional ``base_url`` (or ``endpoint`` / ``host``) when the profile
-        targets a tenant deployed on its own host: ``https://atlas.example.com/api/v1``,
-        or just ``atlas.example.com`` (completed to its API prefix). Returns ``None``
-        when the file or the requested profile does not exist.
+        optional endpoint when the profile targets a tenant: ``host`` (or
+        ``hostname``) holding the tenant's name, ``acme`` for
+        ``https://acme.gwenlakeatlas.com/api/v1``, or ``base_url`` (or
+        ``endpoint``) holding a URL, ``https://atlas.example.com/api/v1`` — a
+        URL is accepted under any of these keys, ``base_url`` winning. Returns
+        ``None`` when the file or the requested profile does not exist.
         """
         config_path = cls._default_config_path()
 
@@ -174,6 +177,12 @@ class Credentials:
         info = config[profile]
 
         hostname = info.get("hostname")
+        base_url = info.get("base_url") or info.get("endpoint") or info.get("host") or None
+        # `hostname` names the tenant too. With client credentials it used to be
+        # the OAuth server, given as a URL: that reading is kept, a bare name
+        # being the tenant in every case.
+        if hostname and (TENANT_NAME.fullmatch(hostname.strip()) or not info.get("client_id")):
+            base_url, hostname = base_url or hostname, None
         token_uri = f"{hostname}{TOKEN_REQUEST_PATH}" if hostname else None
 
         scopes = info.get("scopes")
@@ -184,9 +193,9 @@ class Credentials:
             token=info.get("token"),
             hostname=hostname,
             token_uri=token_uri,
-            # the API endpoint of the profile: `base_url`, or `endpoint` / `host`
-            # (a bare host is completed by the client); `hostname` stays the OAuth server
-            base_url=info.get("base_url") or info.get("endpoint") or info.get("host") or None,
+            # the API endpoint of the profile, completed by the client
+            # (`normalise_base_url`): a tenant name, a host or a URL
+            base_url=base_url,
             client_id=info.get("client_id"),
             client_secret=info.get("client_secret"),
             scopes=scopes,

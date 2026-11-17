@@ -136,6 +136,20 @@ def test_config_profiles_are_written_to_the_credentials_file(monkeypatch, tmp_pa
     monkeypatch.delenv("GWENLAKE_BASE_URL", raising=False)
     assert _resolve_base_url(None, Credentials.from_profile("acme")) == "https://atlas.acme.example/v1"
 
+    # `host` or `hostname` naming a tenant: its endpoint on gwenlakeatlas.com
+    (tmp_path / "credentials").write_text(
+        "[a]\ntoken = t\nhost = acme\n\n[b]\ntoken = t\nhostname = acme\n\n"
+        "[c]\ntoken = t\nhostname = https://atlas.acme.example/api/v1\n\n"
+        "[d]\ntoken = t\nhostname = acme\nbase_url = https://explicit/v1\n\n"
+        "[oauth]\nclient_id = i\nclient_secret = s\nhostname = https://auth.gwenlake.com\n\n"
+        "[oauth-tenant]\nclient_id = i\nclient_secret = s\nhostname = acme\n")
+    resolved = {name: _resolve_base_url(None, Credentials.from_profile(name)) for name in ("a", "b", "c", "d", "oauth", "oauth-tenant")}
+    assert resolved == {"a": "https://acme.gwenlakeatlas.com/api/v1", "b": "https://acme.gwenlakeatlas.com/api/v1",
+                        "c": "https://atlas.acme.example/api/v1", "d": "https://explicit/v1",
+                        "oauth": "https://atlas.gwenlake.com/api/v1",          # a URL beside client credentials: the OAuth server
+                        "oauth-tenant": "https://acme.gwenlakeatlas.com/api/v1"}
+    assert Credentials.from_profile("oauth").hostname == "https://auth.gwenlake.com"
+
 
 def test_the_endpoint_can_be_given_on_the_command_line(monkeypatch):
     seen = {}
@@ -156,7 +170,8 @@ def test_the_global_options_also_follow_the_command(monkeypatch):
 def test_config_endpoints_lists_the_known_ones(monkeypatch):
     monkeypatch.delenv("GWENLAKE_BASE_URL", raising=False)
     out = run("config", "endpoints").output
-    assert "api    https://api.gwenlake.com/v1" in out and "atlas  https://atlas.gwenlake.com/api/v1" in out
-    assert "current: https://api.gwenlake.com/v1" in out
+    assert "atlas     https://atlas.gwenlake.com/api/v1" in out and "https://<tenant>.gwenlakeatlas.com/api/v1" in out
+    assert "current: https://atlas.gwenlake.com/api/v1" in out
+    assert "current: https://acme.gwenlakeatlas.com/api/v1" in run("--base-url", "acme", "config", "endpoints").output
     out = run("--base-url", "atlas", "config", "endpoints").output
     assert "current: https://atlas.gwenlake.com/api/v1" in out

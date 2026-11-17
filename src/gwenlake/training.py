@@ -91,7 +91,7 @@ STEP_DIR_PREFIX = "step-"
 ENV_FILE = ".env"
 #: The tracking server belongs to the project, not to each workstation's
 #: setup. MLFLOW_TRACKING_URI still wins when it is set.
-TRACKING_URI = "https://api.gwenlake.com/v1/mlflow"
+TRACKING_URI = "https://atlas.gwenlake.com/api/v1/mlflow"
 #: Credentials that make a remote server usable. Without one of them the
 #: tracker stays inert rather than opening a run that would be refused at
 #: the first call.

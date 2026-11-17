@@ -217,19 +217,32 @@ profile.
 
 | Short name | URL | Serves |
 | --- | --- | --- |
-| `api` (default) | `https://api.gwenlake.com/v1` | the Gwenlake APIs and the Atlas catalog |
-| `atlas` | `https://atlas.gwenlake.com/api/v1` | the same API, as the Atlas application serves it |
-| a tenant | `https://atlas.acme.example/v1` or `/api/v1` | a platform deployed for one client; give the host, the prefix is probed |
+| `atlas` (default) | `https://atlas.gwenlake.com/api/v1` | the Gwenlake APIs and the Atlas catalog |
+| a tenant's name, `acme` | `https://acme.gwenlakeatlas.com/api/v1` | the platform of one tenant |
+| a host or a URL | `https://atlas.acme.example/v1` or `/api/v1` | a platform on its own host; given a bare host, the prefix is probed |
 
 The endpoint is `base_url=` on the client or `--base-url` on the command line,
-else `GWENLAKE_BASE_URL`, else the `base_url` (or `host`) of the credentials
-profile, else `api`. The constants live in `gwenlake.constants`
-(`GWENLAKE_API_URL`, `GWENLAKE_ATLAS_URL`, `KNOWN_ENDPOINTS`), and
-`gwenlake config endpoints` prints them with the one in use. A tenant deployed
-on its own host is reached by naming it:
+else `GWENLAKE_BASE_URL`, else the one of the credentials profile, else
+`atlas`. A profile names its tenant with `host` (or `hostname`), or gives a URL
+with `base_url`:
+
+```ini
+[acme]
+token = sk-...
+host = acme                 # https://acme.gwenlakeatlas.com/api/v1
+
+[elsewhere]
+token = sk-...
+base_url = https://atlas.acme.example/api/v1
+```
+
+The constants live in `gwenlake.constants` (`GWENLAKE_ATLAS_URL`,
+`GWENLAKE_TENANT_URL`, `KNOWN_ENDPOINTS`), and `gwenlake config endpoints`
+prints them with the one in use.
 
 ```sh
-gwenlake config set-profile acme --token sk-... --base-url https://atlas.acme.example/v1
+gwenlake config set-profile acme --token sk-... --hostname acme
+gwenlake config set-profile elsewhere --token sk-... --base-url https://atlas.acme.example/api/v1
 gwenlake --profile acme datasets list
 gwenlake config list        # the profiles, secrets masked
 ```
@@ -409,11 +422,8 @@ def predict(customers, model):
     return customers.assign(churn=clf.predict(customers))
 ```
 
-Models are a catalog resource served by api-catalog. Its `/models` endpoints
-are **not** routed through the public gateway today (that path serves the
-inference model list), so `model.info()` / `model.update()` work from inside a
-build — where the client already points at api-catalog — but not against
-`api.gwenlake.com`. `model.path` never needs an API call during a build.
+Models are a catalog resource served by api-catalog. `model.path` never needs
+an API call during a build.
 
 `output.path` (and `model.path`) is the model's directory **in the checkout**:
 during a build the engine sets it, commits whatever the training run wrote

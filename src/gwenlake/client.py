@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any, Iterator, AsyncIterator, Union, IO, Tupl
 from urllib.parse import quote
 
 from gwenlake.version import __version__
-from gwenlake.constants import DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, DEFAULT_CONNECTION_LIMITS, KNOWN_ENDPOINTS
+from gwenlake.constants import DEFAULT_BASE_URL, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, DEFAULT_CONNECTION_LIMITS, GWENLAKE_TENANT_URL, KNOWN_ENDPOINTS, TENANT_NAME
 from gwenlake.credentials import Credentials
 
 
@@ -322,18 +322,19 @@ def _resolve_credentials(
     )
 
 
-#: Where a Gwenlake deployment serves its API, relative to a host: an API host
-#: (`api.gwenlake.com`) under `/v1`, an Atlas application host
-#: (`atlas.gwenlake.com`, a tenant's own host) under `/api/v1`.
+#: Where a Gwenlake deployment serves its API, relative to a host: an Atlas
+#: application host (`atlas.gwenlake.com`, `<tenant>.gwenlakeatlas.com`) under
+#: `/api/v1`, a gateway in front of the API under `/v1`.
 API_PREFIXES = ("/v1", "/api/v1")
 
 
 def normalise_base_url(url: str) -> str:
     """An endpoint as the transport wants it. A short name of
-    `KNOWN_ENDPOINTS` (`api`, `atlas`) is its URL; otherwise a scheme (https
+    `KNOWN_ENDPOINTS` (`atlas`) is its URL and any other bare name is a tenant:
+    `acme` -> `https://acme.gwenlakeatlas.com/api/v1`. Otherwise a scheme (https
     by default), no trailing slash, and the version prefix completed when it
     is missing: a bare host gets `/v1`, a host with `/api` gets `/api/v1`. Any
-    other path is kept as given. `api.gwenlake.com` -> `https://api.gwenlake.com/v1`,
+    other path is kept as given. `atlas.acme.example` -> `https://atlas.acme.example/v1`,
     `https://atlas.gwenlake.com/api` -> `https://atlas.gwenlake.com/api/v1`.
     A URL ending with a bare `/` keeps the API at the root of its host, as a
     catalog-service run locally without a gateway serves it:
@@ -345,6 +346,8 @@ def normalise_base_url(url: str) -> str:
     url = url.rstrip("/")
     if url.lower() in KNOWN_ENDPOINTS:
         return KNOWN_ENDPOINTS[url.lower()]
+    if TENANT_NAME.fullmatch(url) and url.lower() != "localhost":
+        return GWENLAKE_TENANT_URL.format(tenant=url.lower())
     if "://" not in url:
         url = "https://" + url
     scheme, _, rest = url.partition("://")
@@ -367,8 +370,9 @@ def candidate_base_urls(url: str) -> list:
 
 def _resolve_base_url(base_url: Optional[str] = None, credentials: Optional[Credentials] = None) -> str:
     """The API endpoint, in order: the explicit `base_url`, `GWENLAKE_BASE_URL`,
-    the `base_url` of the credentials profile, the default gateway. A tenant
-    deployed on its own host is reached by naming it in one of these."""
+    the endpoint of the credentials profile (`base_url`, or the tenant its
+    `host` / `hostname` names), the default (`atlas.gwenlake.com/api/v1`). A
+    tenant is reached by naming it, or its URL, in one of these."""
     chosen = (base_url or os.environ.get("GWENLAKE_BASE_URL")
               or (getattr(credentials, "base_url", None) if credentials is not None else None)
               or DEFAULT_BASE_URL)
