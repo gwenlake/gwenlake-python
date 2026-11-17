@@ -117,6 +117,7 @@ handful of a few hundred columns::
 import functools
 import inspect
 import io
+import json
 import contextlib
 import os
 import re
@@ -364,6 +365,25 @@ def _catalog_branch() -> Optional[str]:
     return branch if branch and branch != "main" else None
 
 
+def _input_branches() -> Optional[Dict[str, Any]]:
+    raw = os.environ.get("CATALOG_INPUT_BRANCHES", "").strip()
+    if not raw:
+        return None
+    try:
+        branches = json.loads(raw)
+    except ValueError:
+        return None
+    return branches if isinstance(branches, dict) else None
+
+
+def _branch_for(key: str) -> Optional[str]:
+    branches = _input_branches()
+    if branches is not None and key in branches:
+        branch = str(branches.get(key) or "").strip()
+        return branch if branch and branch != "main" else None
+    return _catalog_branch()
+
+
 def _is_iceberg(client: Any, dataset_id: str) -> bool:
     """Whether the dataset is Iceberg-backed (so writes go through the table, not
     the raw file store). Best-effort: any lookup failure assumes files."""
@@ -387,7 +407,7 @@ def _sql_table(client: Any, ref: str) -> str:
         # Already a snapshot handle (`project.dataset[:branch]@…`), built by
         # `IncrementalTransformInput` on top of this function: as-is.
         return handle
-    branch = _catalog_branch()
+    branch = _branch_for(handle)
     return f"{handle}:{branch}" if branch else handle
 
 
@@ -624,7 +644,7 @@ class FileSystem:
         self._dataset_id = dataset_id
 
     def _list(self, path: Optional[str]) -> List[Dict[str, Any]]:
-        return self._client.files.list(self._dataset_id, path=path, branch=_catalog_branch())
+        return self._client.files.list(self._dataset_id, path=path, branch=_branch_for(self._dataset_id))
 
     def ls(self, path: Optional[str] = None, *, glob: Optional[str] = None) -> List[Dict[str, Any]]:
         """List files in the dataset (optionally under ``path``).
@@ -658,7 +678,7 @@ class FileSystem:
 
     def read(self, filepath: str) -> bytes:
         """Download a file's raw bytes."""
-        return self._client.files.download(self._dataset_id, filepath, branch=_catalog_branch())
+        return self._client.files.download(self._dataset_id, filepath, branch=_branch_for(self._dataset_id))
 
     def write(
         self,
