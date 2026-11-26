@@ -1458,6 +1458,27 @@ def api_keys_delete(s: Session, api_key_id):
     click.echo("deleted")
 
 
+@main.group(help="Ontologies.")
+def ontology() -> None:
+    pass
+
+
+@ontology.command("codegen")
+@click.argument("ontology_id")
+@click.option("--out", "out", default=None, type=click.Path(dir_okay=False, writable=True), help="Write the module to this file (default: standard output).")
+@pass_session
+def ontology_codegen(s: Session, ontology_id, out):
+    from gwenlake.ontology_codegen import generate
+
+    source = generate(s.client.ontologies.get(ontology_id))
+    if out:
+        with open(out, "w", encoding="utf-8") as handle:
+            handle.write(source)
+        click.echo(f"wrote {out}")
+    else:
+        click.echo(source, nl=False)
+
+
 # -- the global options, after the command too -----------------------------------
 
 def _set_session(attr: str) -> Callable[[click.Context, click.Parameter, Any], None]:
